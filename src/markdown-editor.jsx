@@ -15,36 +15,23 @@ import {
 const parseMarkdown = (markdown) => {
   let html = markdown;
 
-  // 標題
-  html = html.replace(/^### (.*$)/gim, "<h3>$1</h3>");
-  html = html.replace(/^## (.*$)/gim, "<h2>$1</h2>");
-  html = html.replace(/^# (.*$)/gim, "<h1>$1</h1>");
-
-  // 粗體
-  html = html.replace(/\*\*(.*?)\*\*/g, "<strong>$1</strong>");
-  html = html.replace(/__(.*?)__/g, "<strong>$1</strong>");
-
-  // 斜體
-  html = html.replace(/\*(.*?)\*/g, "<em>$1</em>");
-  html = html.replace(/_(.*?)_/g, "<em>$1</em>");
-
-  // 程式碼區塊
+  // 程式碼區塊（先處理，避免被其他規則影響）
   html = html.replace(/```(.*?)```/gs, "<pre><code>$1</code></pre>");
 
   // 行內程式碼
   html = html.replace(/`([^`]+)`/g, "<code>$1</code>");
 
-  // 連結
-  html = html.replace(
-    /\[([^\]]+)\]\(([^)]+)\)/g,
-    '<a href="$2" target="_blank">$1</a>'
-  );
+  // 標題
+  html = html.replace(/^### (.*$)/gim, "<h3>$1</h3>");
+  html = html.replace(/^## (.*$)/gim, "<h2>$1</h2>");
+  html = html.replace(/^# (.*$)/gim, "<h1>$1</h1>");
 
-  // 圖片
-  html = html.replace(
-    /!\[([^\]]*)\]\(([^)]+)\)/g,
-    '<img src="$2" alt="$1" style="max-width: 100%;" />'
-  );
+  // 水平線
+  html = html.replace(/^---$/gim, "<hr />");
+  html = html.replace(/^\*\*\*$/gim, "<hr />");
+
+  // 引用
+  html = html.replace(/^> (.*$)/gim, "<blockquote>$1</blockquote>");
 
   // 無序列表
   html = html.replace(/^\* (.*$)/gim, "<li>$1</li>");
@@ -54,15 +41,36 @@ const parseMarkdown = (markdown) => {
   // 有序列表
   html = html.replace(/^\d+\. (.*$)/gim, "<li>$1</li>");
 
-  // 引用
-  html = html.replace(/^> (.*$)/gim, "<blockquote>$1</blockquote>");
+  // 圖片
+  html = html.replace(
+    /!\[([^\]]*)\]\(([^)]+)\)/g,
+    '<img src="$2" alt="$1" style="max-width: 100%;" />'
+  );
 
-  // 水平線
-  html = html.replace(/^---$/gim, "<hr />");
-  html = html.replace(/^\*\*\*$/gim, "<hr />");
+  // 連結
+  html = html.replace(
+    /\[([^\]]+)\]\(([^)]+)\)/g,
+    '<a href="$2" target="_blank">$1</a>'
+  );
 
-  // 段落
+  // 粗體
+  html = html.replace(/\*\*(.*?)\*\*/g, "<strong>$1</strong>");
+  html = html.replace(/__(.*?)__/g, "<strong>$1</strong>");
+
+  // 斜體
+  html = html.replace(/\*(.*?)\*/g, "<em>$1</em>");
+  html = html.replace(/_(.*?)_/g, "<em>$1</em>");
+
+  // 處理換行：移除 HTML 標籤後面的換行，避免多餘空行
+  html = html.replace(/(<\/h[123]>)\n/g, "$1");
+  html = html.replace(/(<\/blockquote>)\n/g, "$1");
+  html = html.replace(/(<\/li>)\n/g, "$1");
+  html = html.replace(/(<hr \/>)\n/g, "$1");
+  html = html.replace(/(<\/pre>)\n/g, "$1");
+
+  // 段落：雙換行分段，單換行轉為 <br />
   html = html.replace(/\n\n/g, "</p><p>");
+  html = html.replace(/\n/g, "<br />");
   html = "<p>" + html + "</p>";
 
   return html;
