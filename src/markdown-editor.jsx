@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import {
   FileText,
   Plus,
@@ -14,9 +14,11 @@ import {
   Folder,
   FolderOpen,
   FolderPlus,
+  Share2,
 } from "lucide-react";
 import { marked } from "marked";
 import DOMPurify from "dompurify";
+import { encodeShare, decodeShare, LINK_WARN_LENGTH } from "./share";
 
 // 預覽裡的連結開新分頁，不要把編輯器換掉
 DOMPurify.addHook("afterSanitizeAttributes", (node) => {
@@ -33,14 +35,19 @@ const parseMarkdown = (markdown) =>
     FORBID_TAGS: ["style"],
   });
 
+// 字數以字素計：👍🏽、👨‍👩‍👧 這類組合 emoji 也只算一個字
+const graphemes = new Intl.Segmenter();
+
 // 側邊欄拖曳用自訂型別，不會被 textarea 當成文字插入，也不會把拖曳的文字誤認成檔案 ID
 const FILE_ID_TYPE = "application/x-md-file-id";
+
+const STORAGE_KEY = "markdown-editor-data";
 
 const MarkdownEditor = () => {
   // 從 localStorage 載入資料，若無則使用預設值
   const loadFromStorage = () => {
     try {
-      const savedData = localStorage.getItem("markdown-editor-data");
+      const savedData = localStorage.getItem(STORAGE_KEY);
       if (savedData) {
         const parsed = JSON.parse(savedData);
         return {
@@ -87,10 +94,12 @@ const MarkdownEditor = () => {
   const [nextId, setNextId] = useState(initialData.nextId);
   const [deleteConfirm, setDeleteConfirm] = useState(null); // 儲存要刪除的檔案 ID
   const [copied, setCopied] = useState(false); // 複製狀態
+  const [shared, setShared] = useState(false); // 分享連結已複製
   const [draggingId, setDraggingId] = useState(null); // 正在拖曳的檔案 ID
   const [dragOver, setDragOver] = useState(null); // 拖曳經過的目標：資料夾 ID 或 "root"
 
   // 自動同步到 localStorage
+  const quotaAlerted = useRef(false); // 空間不足只提醒一次，不要每打一個字就跳
   useEffect(() => {
     const dataToSave = {
       files,
@@ -99,8 +108,36 @@ const MarkdownEditor = () => {
       nextId,
       sidebarCollapsed,
     };
-    localStorage.setItem("markdown-editor-data", JSON.stringify(dataToSave));
+    // 超過容量會 throw：沒接住的話整個編輯器會被 React 卸載
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(dataToSave));
+      quotaAlerted.current = false;
+    } catch (error) {
+      console.error("儲存失敗:", error);
+      if (!quotaAlerted.current) {
+        quotaAlerted.current = true;
+        alert(
+          "瀏覽器儲存空間不足，目前的變更沒有儲存。請刪除或匯出較大的檔案。",
+        );
+      }
+    }
   }, [files, folders, currentFileId, nextId, sidebarCollapsed]);
+
+  // 其他分頁存檔時跟著更新，不然這個分頁下次存檔會用舊資料把它蓋掉
+  // ponytail: 整份狀態直接採用（包含目前開的檔案），要各分頁獨立選檔得把 currentFileId 拆出來存
+  useEffect(() => {
+    const onStorage = (e) => {
+      if (e.key !== STORAGE_KEY) return;
+      const data = loadFromStorage();
+      setFiles(data.files);
+      setFolders(data.folders);
+      setCurrentFileId(data.currentFileId);
+      setNextId(data.nextId);
+      setSidebarCollapsed(data.sidebarCollapsed);
+    };
+    window.addEventListener("storage", onStorage);
+    return () => window.removeEventListener("storage", onStorage);
+  }, []);
 
   // 檔案沒放進側邊欄時，別讓瀏覽器直接打開它而離開編輯器
   // 只攔檔案：拖曳文字到 textarea 仍維持原本行為
@@ -116,7 +153,40 @@ const MarkdownEditor = () => {
     };
   }, []);
 
+  // 從分享連結打開：內容存成一個新檔案
+  useEffect(() => {
+    const payload = new URLSearchParams(location.hash.slice(1)).get("s");
+    if (!payload) return;
+    // 先清掉 hash：重新整理不會重複匯入，StrictMode 跑兩次 effect 也只匯入一次
+    history.replaceState(null, "", location.pathname + location.search);
+    // 先預留 ID 再 await，同 importFiles
+    const id = nextId;
+    setNextId(id + 1);
+    decodeShare(payload)
+      .then(({ name, content }) => {
+        setFiles((prev) => [...prev, { id, name, content, folderId: null }]);
+        setCurrentFileId(id);
+      })
+      .catch(() => alert("分享連結無效或不完整"));
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- 只在載入時讀一次網址
+  }, []);
+
+  // 在已開著的分頁貼上分享連結只會改 hash、不會重新載入：重新載入讓上面的 effect 處理
+  useEffect(() => {
+    const onHashChange = () => {
+      if (new URLSearchParams(location.hash.slice(1)).has("s")) {
+        location.reload();
+      }
+    };
+    window.addEventListener("hashchange", onHashChange);
+    return () => window.removeEventListener("hashchange", onHashChange);
+  }, []);
+
   const currentFile = files.find((f) => f.id === currentFileId);
+  const currentContent = currentFile?.content || "";
+  // 字數：不算空白與換行
+  const visibleChars = currentContent.replace(/\s/g, "");
+  const charCount = [...graphemes.segment(visibleChars)].length;
 
   // 新增/匯入到收合的資料夾時展開它，不然新檔案在側邊欄看不到
   const expandFolder = (id) =>
@@ -252,6 +322,32 @@ const MarkdownEditor = () => {
     if (folderId) expandFolder(folderId);
   };
 
+  const shareLink = () => {
+    if (!currentFile) return;
+    const link = encodeShare({
+      name: currentFile.name,
+      content: currentFile.content,
+    }).then((payload) => `${location.origin}${location.pathname}#s=${payload}`);
+    // Safari 只允許在點擊當下寫剪貼簿：先同步交出 promise，壓縮完再填入內容
+    navigator.clipboard
+      .write([
+        new ClipboardItem({
+          "text/plain": link.then((l) => new Blob([l], { type: "text/plain" })),
+        }),
+      ])
+      .then(() => link)
+      .then((l) => {
+        setShared(true);
+        setTimeout(() => setShared(false), 2000);
+        if (l.length > LINK_WARN_LENGTH) {
+          alert(
+            `連結已複製，但長度有 ${l.length} 字元，LINE、簡訊等部分 App 可能無法完整開啟。`,
+          );
+        }
+      })
+      .catch(() => alert("無法複製分享連結，請確認瀏覽器允許使用剪貼簿"));
+  };
+
   const copyContent = () => {
     if (!currentFile) return;
     navigator.clipboard.writeText(currentFile.content).then(() => {
@@ -356,7 +452,9 @@ const MarkdownEditor = () => {
               </div>
             </div>
 
-            <p className="text-xs text-gray-400">拖曳 .md 檔到下方，或點上方按鈕匯入</p>
+            <p className="text-xs text-gray-400">
+              拖曳 .md 檔到下方，或點上方按鈕匯入
+            </p>
           </div>
 
           <div
@@ -387,7 +485,10 @@ const MarkdownEditor = () => {
                     }
                   >
                     <ChevronIcon size={14} className="shrink-0 text-gray-400" />
-                    <FolderIcon size={16} className="shrink-0 text-yellow-400" />
+                    <FolderIcon
+                      size={16}
+                      className="shrink-0 text-yellow-400"
+                    />
                     <input
                       type="text"
                       value={folder.name}
@@ -461,7 +562,7 @@ const MarkdownEditor = () => {
       </div>
 
       {/* 主要內容區 */}
-      <div className="flex-1 flex flex-col">
+      <div className="flex-1 min-w-0 flex flex-col">
         {/* 工具列 */}
         <div className="bg-white border-b px-4 py-2 flex items-center justify-between">
           <div className="flex items-center gap-2">
@@ -500,6 +601,24 @@ const MarkdownEditor = () => {
                 </>
               )}
             </button>
+            {/* 分享連結按鈕 */}
+            <button
+              onClick={shareLink}
+              className="flex items-center px-3 py-1 bg-purple-600 text-white rounded hover:bg-purple-700"
+              title="複製分享連結（內容存在連結裡）"
+            >
+              {shared ? (
+                <>
+                  <Check size={16} className="mr-2" />
+                  已複製連結
+                </>
+              ) : (
+                <>
+                  <Share2 size={16} className="mr-2" />
+                  分享
+                </>
+              )}
+            </button>
             {/* 匯出按鈕 */}
             <button
               onClick={exportFile}
@@ -515,22 +634,25 @@ const MarkdownEditor = () => {
         {/* 編輯器和預覽區 */}
         <div className="flex-1 flex overflow-hidden">
           {/* Markdown 編輯區 */}
-          <div className="flex-1 border-r">
+          <div className="relative flex-1 min-w-0 border-r">
             <textarea
-              value={currentFile?.content || ""}
+              value={currentContent}
               onChange={(e) => updateFileContent(e.target.value)}
-              className="w-full h-full p-4 font-mono text-sm resize-none outline-none"
+              className="w-full h-full p-4 pb-10 font-mono text-sm resize-none outline-none"
               placeholder="在此輸入 Markdown..."
             />
+            <div className="pointer-events-none absolute bottom-2 right-4 rounded bg-white/90 px-2 py-0.5 text-xs text-gray-500 tabular-nums">
+              {charCount} 字
+            </div>
           </div>
 
           {/* 預覽區 */}
-          <div className="flex-1 overflow-auto bg-white">
+          <div className="flex-1 min-w-0 overflow-auto bg-white">
             {/* contain:paint 讓 inline style 的 position:fixed 只能待在預覽區內，蓋不到整個編輯器 */}
             <div
-              className="p-4 prose max-w-none [contain:paint]"
+              className="p-4 prose max-w-none [contain:paint] [overflow-wrap:anywhere]"
               dangerouslySetInnerHTML={{
-                __html: parseMarkdown(currentFile?.content || ""),
+                __html: parseMarkdown(currentContent),
               }}
               style={{
                 lineHeight: "1.6",
