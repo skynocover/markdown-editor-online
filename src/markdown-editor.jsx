@@ -3,21 +3,25 @@ import {
   FileText,
   Plus,
   Trash2,
-  ChevronLeft,
   ChevronRight,
   ChevronDown,
   GripVertical,
   Download,
-  Upload,
   Copy,
   Check,
   Folder,
   FolderOpen,
   FolderPlus,
+  FilePlus,
+  Upload,
   Share2,
   Lock,
   Eye,
   X,
+  Archive,
+  Github,
+  PanelLeftClose,
+  PanelLeftOpen,
 } from "lucide-react";
 import { marked } from "marked";
 import DOMPurify from "dompurify";
@@ -28,6 +32,19 @@ import {
   readShareHash,
   LINK_WARN_LENGTH,
 } from "./share";
+import { toZip, fromZip } from "./backup";
+import { isAutoNamed, nameFromContent } from "./file-name";
+
+const REPO_URL = "https://github.com/skynocover/markdown-editor-online";
+
+const downloadBlob = (blob, fileName) => {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = fileName;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(url)); // 立刻 revoke 在部分瀏覽器會中斷下載
+};
 
 // 預覽裡的連結開新分頁，不要把編輯器換掉
 DOMPurify.addHook("afterSanitizeAttributes", (node) => {
@@ -108,6 +125,9 @@ const MarkdownEditor = () => {
     initialData.sidebarCollapsed,
   );
   const [nextId, setNextId] = useState(initialData.nextId);
+  // 匯入要先 await 讀檔才知道要幾個 ID：讀完再從這裡拿最新值
+  const nextIdRef = useRef(nextId);
+  nextIdRef.current = nextId;
   const [deleteConfirm, setDeleteConfirm] = useState(null); // 儲存要刪除的檔案 ID
   const [copied, setCopied] = useState(false); // 複製狀態
   const [shared, setShared] = useState(false); // 分享連結已複製
@@ -196,7 +216,7 @@ const MarkdownEditor = () => {
       setLockedPayload(share.payload); // 等使用者輸入密碼
       return;
     }
-    // 先預留 ID 再 await，同 importFiles（唯讀連結用不到這個 ID，跳過一號無妨）
+    // 先預留 ID 再 await：解碼期間新增的檔案才不會拿到同一個 ID（唯讀連結用不到這個 ID，跳過一號無妨）
     const id = nextId;
     setNextId(id + 1);
     decodeShare(share.payload)
@@ -262,6 +282,7 @@ const MarkdownEditor = () => {
       name: `新檔案${nextId}.md`,
       content: "",
       folderId,
+      autoName: true, // 打字後用第一行當檔名，使用者改過檔名就停止
     };
     setFiles([...files, newFile]);
     setCurrentFileId(nextId);
@@ -343,44 +364,89 @@ const MarkdownEditor = () => {
   });
 
   const updateFileName = (id, newName) => {
-    setFiles(files.map((f) => (f.id === id ? { ...f, name: newName } : f)));
+    setFiles(
+      files.map((f) =>
+        f.id === id ? { ...f, name: newName, autoName: false } : f,
+      ),
+    );
   };
 
   const updateFileContent = (content) => {
     setFiles(
-      files.map((f) => (f.id === currentFileId ? { ...f, content } : f)),
+      files.map((f) => {
+        if (f.id !== currentFileId) return f;
+        if (!isAutoNamed(f)) return { ...f, content };
+        // 第一行還沒有字時保留原本檔名
+        // autoName 寫明：舊資料靠「新檔案N.md」判斷，改名後就認不出來了
+        return {
+          ...f,
+          content,
+          name: nameFromContent(content) ?? f.name,
+          autoName: true,
+        };
+      }),
     );
   };
 
   const exportFile = () => {
     if (!currentFile) return;
     const blob = new Blob([currentFile.content], { type: "text/markdown" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = currentFile.name;
-    a.click();
-    URL.revokeObjectURL(url);
+    downloadBlob(blob, currentFile.name);
   };
 
+  // 匯入 .md/.markdown/.txt 與 zip（全部匯出的備份）；zip 裡的目錄會變成資料夾
   const importFiles = async (fileList, folderId) => {
-    const picked = [...fileList].filter((f) =>
-      /\.(md|markdown|txt)$/i.test(f.name),
-    );
-    if (!picked.length) return;
-    // 先預留 ID 再 await：讀檔期間新增的檔案/資料夾才不會拿到同一個 ID
-    const baseId = nextId;
-    setNextId(baseId + picked.length);
-    const contents = await Promise.all(picked.map((f) => f.text()));
-    const newFiles = picked.map((f, i) => ({
-      id: baseId + i,
-      name: f.name,
-      content: contents[i].replace(/\r\n?/g, "\n"), // Windows 換行轉成 \n
-      folderId,
+    const picked = [...fileList]; // await 前先複製：呼叫端清掉 input.value 會清空 FileList
+    const entries = []; // { folder: 資料夾名稱或 null, name, content }
+    try {
+      for (const f of picked) {
+        if (/\.zip$/i.test(f.name)) {
+          entries.push(...fromZip(new Uint8Array(await f.arrayBuffer())));
+        } else if (/\.(md|markdown|txt)$/i.test(f.name)) {
+          const content = (await f.text()).replace(/\r\n?/g, "\n"); // Windows 換行轉成 \n
+          entries.push({ folder: null, name: f.name, content });
+        }
+      }
+    } catch (error) {
+      console.error("匯入失敗:", error);
+      alert("匯入失敗：zip 檔損毀或內容過大");
+      return;
+    }
+    if (!entries.length) return;
+
+    // 讀完才配 ID：讀檔期間新增的檔案/資料夾已反映在 nextIdRef
+    let id = nextIdRef.current;
+    // zip 裡的資料夾：同名的沿用現有資料夾，其餘新建
+    const folderIds = new Map(folders.map((d) => [d.name, d.id]));
+    const newFolders = [];
+    for (const { folder } of entries) {
+      if (folder && !folderIds.has(folder)) {
+        folderIds.set(folder, id);
+        newFolders.push({ id: id++, name: folder, collapsed: false });
+      }
+    }
+    const newFiles = entries.map((e) => ({
+      id: id++,
+      name: e.name,
+      content: e.content,
+      folderId: e.folder ? folderIds.get(e.folder) : folderId,
     }));
+    nextIdRef.current = id; // 不等 render：同時進行的另一次匯入才不會拿到同一批 ID
+    setNextId(id);
+    setFolders((prev) => [...prev, ...newFolders]);
     setFiles((prev) => [...prev, ...newFiles]);
-    setCurrentFileId(baseId);
-    if (folderId) expandFolder(folderId);
+    setCurrentFileId(newFiles[0].id);
+    // zip 可能放進已摺疊的同名資料夾：展開目前檔案所在的那個
+    if (newFiles[0].folderId) expandFolder(newFiles[0].folderId);
+  };
+
+  // 全部檔案打包成 zip 下載，可當備份，拖回側邊欄即可還原
+  const exportAll = () => {
+    const blob = new Blob([toZip(files, folders)], { type: "application/zip" });
+    downloadBlob(
+      blob,
+      `markdown-備份-${new Date().toLocaleDateString("sv")}.zip`, // sv 格式是本地時間的 YYYY-MM-DD
+    );
   };
 
   const openShareDialog = () => {
@@ -465,10 +531,10 @@ const MarkdownEditor = () => {
             e.stopPropagation();
             deleteFile(file.id);
           }}
-          className="p-1 hover:bg-red-600 rounded opacity-0 group-hover:opacity-100 focus:opacity-100"
-          title="刪除檔案"
+          className="group/tip relative p-1 hover:bg-red-600 rounded opacity-0 group-hover:opacity-100 focus:opacity-100"
         >
           <Trash2 size={14} />
+          <Tip text="刪除檔案" align="right" />
         </button>
       </div>
     );
@@ -485,47 +551,49 @@ const MarkdownEditor = () => {
       >
         <div className="h-full flex flex-col">
           {/* 固定在上方，不隨列表捲動 */}
-          <div className="shrink-0 p-4 pb-2 border-b border-gray-700">
-            <div className="flex items-center justify-between mb-1">
-              <h2 className="text-xl font-bold">檔案管理</h2>
-              <div className="flex">
-                <button
-                  onClick={createFolder}
-                  className="p-2 hover:bg-gray-700 rounded"
-                  title="新增資料夾"
-                >
-                  <FolderPlus size={20} />
-                </button>
-                {/* 拖曳以外的匯入方式：觸控裝置、鍵盤使用者 */}
-                <label
-                  className="p-2 hover:bg-gray-700 rounded cursor-pointer focus-within:ring-2 focus-within:ring-blue-400"
-                  title="匯入檔案"
-                >
-                  <Upload size={20} />
-                  <input
-                    type="file"
-                    accept=".md,.markdown,.txt"
-                    multiple
-                    onChange={(e) => {
-                      importFiles(e.target.files, null);
-                      e.target.value = ""; // 讓同一個檔案可以再匯入一次
-                    }}
-                    className="sr-only"
-                  />
-                </label>
-                <button
-                  onClick={() => createNewFile()}
-                  className="p-2 hover:bg-gray-700 rounded"
-                  title="新增檔案"
-                >
-                  <Plus size={20} />
-                </button>
-              </div>
+          <div className="shrink-0 h-14 px-4 border-b border-gray-700 flex items-center justify-between">
+            <h2 className="text-xl font-bold">檔案管理</h2>
+            {/* 新增類放一組，匯出另一組，中間用分隔線隔開 */}
+            <div className="flex items-center gap-0.5">
+              <button
+                onClick={() => createNewFile()}
+                className="group/tip relative p-1.5 hover:bg-gray-700 rounded"
+              >
+                <FilePlus size={18} />
+                <Tip text="新增檔案" />
+              </button>
+              <button
+                onClick={createFolder}
+                className="group/tip relative p-1.5 hover:bg-gray-700 rounded"
+              >
+                <FolderPlus size={18} />
+                <Tip text="新增資料夾" />
+              </button>
+              {/* 拖曳以外的匯入方式：觸控裝置、鍵盤使用者 */}
+              <label className="group/tip relative p-1.5 hover:bg-gray-700 rounded cursor-pointer focus-within:ring-2 focus-within:ring-blue-400">
+                <Upload size={18} />
+                <Tip text="匯入 .md 或 .zip" />
+                <input
+                  type="file"
+                  accept=".md,.markdown,.txt,.zip"
+                  multiple
+                  aria-label="匯入 .md 或 .zip"
+                  onChange={(e) => {
+                    importFiles(e.target.files, null);
+                    e.target.value = ""; // 讓同一個檔案可以再匯入一次
+                  }}
+                  className="sr-only"
+                />
+              </label>
+              <div className="w-px h-5 bg-gray-600 mx-1" />
+              <button
+                onClick={exportAll}
+                className="group/tip relative p-1.5 hover:bg-gray-700 rounded"
+              >
+                <Archive size={18} />
+                <Tip text="全部匯出 zip（可拖回還原）" align="right" />
+              </button>
             </div>
-
-            <p className="text-xs text-gray-400">
-              拖曳 .md 檔到下方，或點上方按鈕匯入
-            </p>
           </div>
 
           <div
@@ -579,20 +647,23 @@ const MarkdownEditor = () => {
                           e.stopPropagation();
                           createNewFile(folder.id);
                         }}
-                        className="p-1 hover:bg-gray-600 rounded"
-                        title="在資料夾中新增檔案"
+                        className="group/tip relative p-1 hover:bg-gray-600 rounded"
                       >
                         <Plus size={14} />
+                        <Tip text="在資料夾中新增檔案" align="right" />
                       </button>
                       <button
                         onClick={(e) => {
                           e.stopPropagation();
                           deleteFolder(folder.id);
                         }}
-                        className="p-1 hover:bg-red-600 rounded"
-                        title="刪除資料夾（檔案會移回根目錄）"
+                        className="group/tip relative p-1 hover:bg-red-600 rounded"
                       >
                         <Trash2 size={14} />
+                        <Tip
+                          text="刪除資料夾（檔案移回根目錄）"
+                          align="right"
+                        />
                       </button>
                     </div>
                   </div>
@@ -615,18 +686,30 @@ const MarkdownEditor = () => {
               <div className="border-t border-gray-700 my-2" />
             )}
             {files.filter((f) => !f.folderId).map(renderFile)}
-
-            {/* 拖曳中才顯示：根目錄的放置區 */}
-            {(draggingId || dragOver) && (
-              <div
-                className={`mt-2 p-3 rounded border-2 border-dashed text-xs text-center ${
-                  dragOver === "root"
-                    ? "border-blue-400 bg-blue-500/10 text-blue-300"
-                    : "border-gray-600 text-gray-400"
-                }`}
-              >
-                {draggingId ? "放到這裡移出資料夾" : "放開以匯入到根目錄"}
-              </div>
+          </div>
+          {/* 根目錄的放置區：固定在側邊欄底部，檔案再多也看得到；平常是匯入提示，拖曳時變成放置目標 */}
+          <div
+            {...dropTarget("root")}
+            onDragLeave={(e) =>
+              !e.currentTarget.contains(e.relatedTarget) && setDragOver(null)
+            }
+            className={`shrink-0 mx-4 mb-3 mt-1 flex items-center justify-center gap-1.5 rounded border-2 border-dashed text-xs transition-colors ${
+              dragOver === "root"
+                ? "p-3 border-blue-400 bg-blue-500/10 text-blue-300"
+                : draggingId || dragOver
+                  ? "p-3 border-gray-500 text-gray-300"
+                  : "py-1 border-transparent text-gray-500"
+            }`}
+          >
+            {draggingId ? (
+              "放到這裡移出資料夾"
+            ) : dragOver ? (
+              "放開以匯入到根目錄"
+            ) : (
+              <>
+                <Upload size={12} />
+                可拖曳 .md 或 .zip 匯入
+              </>
             )}
           </div>
         </div>
@@ -635,30 +718,33 @@ const MarkdownEditor = () => {
       {/* 主要內容區 */}
       <div inert={!!viewDoc} className="flex-1 min-w-0 flex flex-col">
         {/* 工具列 */}
-        <div className="bg-white border-b px-4 py-2 flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            {/* 折疊按鈕 - 移到左上角 */}
+        <div className="shrink-0 h-14 bg-white border-b px-4 flex items-center justify-between gap-4">
+          <div className="flex items-center gap-2 min-w-0">
+            {/* 折疊按鈕：淡色，不搶內容的視線 */}
             <button
               onClick={() => setSidebarCollapsed(!sidebarCollapsed)}
-              className="p-2 bg-gray-800 text-white rounded hover:bg-gray-700"
-              title={sidebarCollapsed ? "展開側邊欄" : "收起側邊欄"}
+              className="group/tip relative p-2 text-gray-500 rounded hover:bg-gray-100 hover:text-gray-900"
             >
               {sidebarCollapsed ? (
-                <ChevronRight size={20} />
+                <PanelLeftOpen size={20} />
               ) : (
-                <ChevronLeft size={20} />
+                <PanelLeftClose size={20} />
               )}
+              <Tip
+                text={sidebarCollapsed ? "展開側邊欄" : "收起側邊欄"}
+                align="left"
+              />
             </button>
-            <h1 className="text-lg font-semibold">
+            <h1 className="text-lg font-semibold truncate">
               {currentFile?.name || "未選擇檔案"}
             </h1>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 shrink-0">
             {/* 複製按鈕 */}
             <button
               onClick={copyContent}
-              className="flex items-center px-3 py-1 bg-blue-600 text-white rounded hover:bg-blue-700"
-              title="複製內容"
+              className="group/tip relative flex items-center px-3 py-1.5 text-sm text-gray-700 border border-gray-300 rounded hover:bg-gray-50"
+              aria-label="複製 Markdown 原文"
             >
               {copied ? (
                 <>
@@ -671,25 +757,37 @@ const MarkdownEditor = () => {
                   複製
                 </>
               )}
-            </button>
-            {/* 分享按鈕：打開分享設定 */}
-            <button
-              onClick={openShareDialog}
-              className="flex items-center px-3 py-1 bg-purple-600 text-white rounded hover:bg-purple-700"
-              title="產生分享連結（內容存在連結裡）"
-            >
-              <Share2 size={16} className="mr-2" />
-              分享
+              <Tip text="複製 Markdown 原文" />
             </button>
             {/* 匯出按鈕 */}
             <button
               onClick={exportFile}
-              className="flex items-center px-3 py-1 bg-green-600 text-white rounded hover:bg-green-700"
-              title="匯出檔案"
+              className="group/tip relative flex items-center px-3 py-1.5 text-sm text-gray-700 border border-gray-300 rounded hover:bg-gray-50"
+              aria-label="下載目前檔案（.md）"
             >
               <Download size={16} className="mr-2" />
               匯出
+              <Tip text="下載目前檔案（.md）" />
             </button>
+            {/* 分享按鈕：打開分享設定 */}
+            <button
+              onClick={openShareDialog}
+              className="group/tip relative flex items-center px-3 py-1.5 text-sm bg-blue-600 text-white rounded hover:bg-blue-700"
+              aria-label="產生分享連結"
+            >
+              <Share2 size={16} className="mr-2" />
+              分享
+              <Tip text="產生分享連結" />
+            </button>
+            <a
+              href={REPO_URL}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="group/tip relative p-2 text-gray-600 rounded hover:bg-gray-100 hover:text-gray-900"
+            >
+              <Github size={20} />
+              <Tip text="GitHub 原始碼" align="right" />
+            </a>
           </div>
         </div>
 
@@ -700,7 +798,7 @@ const MarkdownEditor = () => {
             <textarea
               value={currentContent}
               onChange={(e) => updateFileContent(e.target.value)}
-              className="w-full h-full p-4 font-mono text-sm resize-none outline-none"
+              className="w-full h-full p-4 bg-gray-50 font-mono text-sm leading-[1.7] resize-none outline-none"
               placeholder="在此輸入 Markdown..."
             />
           </div>
@@ -710,7 +808,7 @@ const MarkdownEditor = () => {
             <div className="h-full overflow-auto bg-white">
               {/* contain:paint 讓 inline style 的 position:fixed 只能待在預覽區內，蓋不到整個編輯器 */}
               <div
-                className="p-4 pb-10 prose max-w-none [contain:paint] [overflow-wrap:anywhere]"
+                className="mx-auto max-w-[70ch] p-6 pb-10 prose [contain:paint] [overflow-wrap:anywhere]"
                 dangerouslySetInnerHTML={{ __html: currentHtml }}
                 style={{
                   lineHeight: "1.6",
@@ -1009,6 +1107,22 @@ const MarkdownEditor = () => {
     </div>
   );
 };
+
+// 滑鼠移上去或鍵盤聚焦時顯示的提示；父元素要有 group/tip relative
+// 只用 opacity 藏起來，螢幕閱讀器讀得到：純圖示按鈕不用再寫 aria-label
+// 原生 title 要停一秒以上才出現，而且觸控、鍵盤都看不到
+const TIP_ALIGN = {
+  left: "left-0",
+  right: "right-0",
+  center: "left-1/2 -translate-x-1/2",
+};
+const Tip = ({ text, align = "center" }) => (
+  <span
+    className={`pointer-events-none absolute top-full z-50 mt-1.5 whitespace-nowrap rounded bg-gray-900 px-2 py-1 text-xs font-normal text-white opacity-0 shadow transition-opacity delay-150 group-hover/tip:opacity-100 group-focus-visible/tip:opacity-100 group-has-[:focus-visible]/tip:opacity-100 ${TIP_ALIGN[align]}`}
+  >
+    {text}
+  </span>
+);
 
 // 預覽區右下角的字數
 const CharCount = ({ html }) => (

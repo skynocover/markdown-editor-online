@@ -13,6 +13,7 @@
     "@tailwindcss/postcss": "^4.1.17",
     "autoprefixer": "^10.4.22",
     "dompurify": "^3.4.17",
+    "fflate": "0.8.2",
     "lucide-react": "^0.553.0",
     "marked": "^18.1.1",
     "postcss": "^8.5.6",
