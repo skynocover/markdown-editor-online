@@ -15,10 +15,19 @@ import {
   FolderOpen,
   FolderPlus,
   Share2,
+  Lock,
+  Eye,
+  X,
 } from "lucide-react";
 import { marked } from "marked";
 import DOMPurify from "dompurify";
-import { encodeShare, decodeShare, LINK_WARN_LENGTH } from "./share";
+import {
+  encodeShare,
+  decodeShare,
+  decryptShare,
+  readShareHash,
+  LINK_WARN_LENGTH,
+} from "./share";
 
 // 預覽裡的連結開新分頁，不要把編輯器換掉
 DOMPurify.addHook("afterSanitizeAttributes", (node) => {
@@ -37,6 +46,13 @@ const parseMarkdown = (markdown) =>
 
 // 字數以字素計：👍🏽、👨‍👩‍👧 這類組合 emoji 也只算一個字
 const graphemes = new Intl.Segmenter();
+
+// 字數：算預覽後看得到的文字（不含 Markdown 符號、連結網址），不算空白與換行
+const countChars = (html) => {
+  const text = new DOMParser().parseFromString(html, "text/html").body
+    .textContent;
+  return [...graphemes.segment(text.replace(/\s/g, ""))].length;
+};
 
 // 側邊欄拖曳用自訂型別，不會被 textarea 當成文字插入，也不會把拖曳的文字誤認成檔案 ID
 const FILE_ID_TYPE = "application/x-md-file-id";
@@ -95,6 +111,14 @@ const MarkdownEditor = () => {
   const [deleteConfirm, setDeleteConfirm] = useState(null); // 儲存要刪除的檔案 ID
   const [copied, setCopied] = useState(false); // 複製狀態
   const [shared, setShared] = useState(false); // 分享連結已複製
+  const [shareOpen, setShareOpen] = useState(false); // 分享對話框
+  const [shareReadonly, setShareReadonly] = useState(false);
+  const [sharePassword, setSharePassword] = useState("");
+  const [viewDoc, setViewDoc] = useState(null); // 唯讀連結打開的文件 { name, content }
+  const [lockedPayload, setLockedPayload] = useState(null); // 待輸入密碼的加密連結
+  const [unlockPassword, setUnlockPassword] = useState("");
+  const [unlockError, setUnlockError] = useState("");
+  const [unlocking, setUnlocking] = useState(false);
   const [draggingId, setDraggingId] = useState(null); // 正在拖曳的檔案 ID
   const [dragOver, setDragOver] = useState(null); // 拖曳經過的目標：資料夾 ID 或 "root"
 
@@ -153,30 +177,68 @@ const MarkdownEditor = () => {
     };
   }, []);
 
-  // 從分享連結打開：內容存成一個新檔案
+  const addSharedFile = (id, { name, content }) => {
+    setFiles((prev) => [...prev, { id, name, content, folderId: null }]);
+    setCurrentFileId(id);
+  };
+
+  // 可編輯連結：存成新檔案；唯讀連結：只顯示預覽，按「存成我的檔案」才存
+  const openSharedDoc = (id, doc) =>
+    doc.readonly ? setViewDoc(doc) : addSharedFile(id, doc);
+
+  // 從分享連結打開
   useEffect(() => {
-    const payload = new URLSearchParams(location.hash.slice(1)).get("s");
-    if (!payload) return;
+    const share = readShareHash(location.hash);
+    if (!share) return;
     // 先清掉 hash：重新整理不會重複匯入，StrictMode 跑兩次 effect 也只匯入一次
     history.replaceState(null, "", location.pathname + location.search);
-    // 先預留 ID 再 await，同 importFiles
+    if (share.encrypted) {
+      setLockedPayload(share.payload); // 等使用者輸入密碼
+      return;
+    }
+    // 先預留 ID 再 await，同 importFiles（唯讀連結用不到這個 ID，跳過一號無妨）
     const id = nextId;
     setNextId(id + 1);
-    decodeShare(payload)
-      .then(({ name, content }) => {
-        setFiles((prev) => [...prev, { id, name, content, folderId: null }]);
-        setCurrentFileId(id);
-      })
+    decodeShare(share.payload)
+      .then((doc) => openSharedDoc(id, doc))
       .catch(() => alert("分享連結無效或不完整"));
     // eslint-disable-next-line react-hooks/exhaustive-deps -- 只在載入時讀一次網址
   }, []);
 
+  const cancelUnlock = () => {
+    setLockedPayload(null);
+    setUnlockPassword("");
+    setUnlockError("");
+  };
+
+  const unlockShare = async (e) => {
+    e.preventDefault();
+    setUnlocking(true);
+    const id = nextId;
+    setNextId(id + 1);
+    try {
+      const doc = await decryptShare(lockedPayload, unlockPassword);
+      cancelUnlock();
+      openSharedDoc(id, doc);
+    } catch {
+      // AES-GCM 驗證失敗分不出是密碼錯還是連結被截斷
+      setUnlockError("密碼錯誤，或連結不完整");
+    } finally {
+      setUnlocking(false);
+    }
+  };
+
+  const saveViewDoc = () => {
+    const id = nextId;
+    setNextId(id + 1);
+    addSharedFile(id, viewDoc);
+    setViewDoc(null);
+  };
+
   // 在已開著的分頁貼上分享連結只會改 hash、不會重新載入：重新載入讓上面的 effect 處理
   useEffect(() => {
     const onHashChange = () => {
-      if (new URLSearchParams(location.hash.slice(1)).has("s")) {
-        location.reload();
-      }
+      if (readShareHash(location.hash)) location.reload();
     };
     window.addEventListener("hashchange", onHashChange);
     return () => window.removeEventListener("hashchange", onHashChange);
@@ -184,9 +246,8 @@ const MarkdownEditor = () => {
 
   const currentFile = files.find((f) => f.id === currentFileId);
   const currentContent = currentFile?.content || "";
-  // 字數：不算空白與換行
-  const visibleChars = currentContent.replace(/\s/g, "");
-  const charCount = [...graphemes.segment(visibleChars)].length;
+  const currentHtml = parseMarkdown(currentContent);
+  const viewHtml = viewDoc ? parseMarkdown(viewDoc.content) : "";
 
   // 新增/匯入到收合的資料夾時展開它，不然新檔案在側邊欄看不到
   const expandFolder = (id) =>
@@ -322,12 +383,21 @@ const MarkdownEditor = () => {
     if (folderId) expandFolder(folderId);
   };
 
+  const openShareDialog = () => {
+    setSharePassword(""); // 不沿用上次的密碼，避免不小心用錯
+    setShareOpen(true);
+  };
+
   const shareLink = () => {
     if (!currentFile) return;
-    const link = encodeShare({
-      name: currentFile.name,
-      content: currentFile.content,
-    }).then((payload) => `${location.origin}${location.pathname}#s=${payload}`);
+    const link = encodeShare(
+      {
+        name: currentFile.name,
+        content: currentFile.content,
+        readonly: shareReadonly,
+      },
+      sharePassword,
+    ).then((hash) => `${location.origin}${location.pathname}#${hash}`);
     // Safari 只允許在點擊當下寫剪貼簿：先同步交出 promise，壓縮完再填入內容
     navigator.clipboard
       .write([
@@ -406,8 +476,9 @@ const MarkdownEditor = () => {
 
   return (
     <div className="flex h-screen bg-gray-100">
-      {/* 側邊欄 */}
+      {/* 側邊欄（唯讀預覽蓋住時設 inert，Tab 才不會跑到底下改到檔案） */}
       <div
+        inert={!!viewDoc}
         className={`bg-gray-800 text-white transition-all duration-300 ${
           sidebarCollapsed ? "w-0" : "w-64"
         } overflow-hidden`}
@@ -562,7 +633,7 @@ const MarkdownEditor = () => {
       </div>
 
       {/* 主要內容區 */}
-      <div className="flex-1 min-w-0 flex flex-col">
+      <div inert={!!viewDoc} className="flex-1 min-w-0 flex flex-col">
         {/* 工具列 */}
         <div className="bg-white border-b px-4 py-2 flex items-center justify-between">
           <div className="flex items-center gap-2">
@@ -601,23 +672,14 @@ const MarkdownEditor = () => {
                 </>
               )}
             </button>
-            {/* 分享連結按鈕 */}
+            {/* 分享按鈕：打開分享設定 */}
             <button
-              onClick={shareLink}
+              onClick={openShareDialog}
               className="flex items-center px-3 py-1 bg-purple-600 text-white rounded hover:bg-purple-700"
-              title="複製分享連結（內容存在連結裡）"
+              title="產生分享連結（內容存在連結裡）"
             >
-              {shared ? (
-                <>
-                  <Check size={16} className="mr-2" />
-                  已複製連結
-                </>
-              ) : (
-                <>
-                  <Share2 size={16} className="mr-2" />
-                  分享
-                </>
-              )}
+              <Share2 size={16} className="mr-2" />
+              分享
             </button>
             {/* 匯出按鈕 */}
             <button
@@ -634,30 +696,28 @@ const MarkdownEditor = () => {
         {/* 編輯器和預覽區 */}
         <div className="flex-1 flex overflow-hidden">
           {/* Markdown 編輯區 */}
-          <div className="relative flex-1 min-w-0 border-r">
+          <div className="flex-1 min-w-0 border-r">
             <textarea
               value={currentContent}
               onChange={(e) => updateFileContent(e.target.value)}
-              className="w-full h-full p-4 pb-10 font-mono text-sm resize-none outline-none"
+              className="w-full h-full p-4 font-mono text-sm resize-none outline-none"
               placeholder="在此輸入 Markdown..."
             />
-            <div className="pointer-events-none absolute bottom-2 right-4 rounded bg-white/90 px-2 py-0.5 text-xs text-gray-500 tabular-nums">
-              {charCount} 字
-            </div>
           </div>
 
-          {/* 預覽區 */}
-          <div className="flex-1 min-w-0 overflow-auto bg-white">
-            {/* contain:paint 讓 inline style 的 position:fixed 只能待在預覽區內，蓋不到整個編輯器 */}
-            <div
-              className="p-4 prose max-w-none [contain:paint] [overflow-wrap:anywhere]"
-              dangerouslySetInnerHTML={{
-                __html: parseMarkdown(currentContent),
-              }}
-              style={{
-                lineHeight: "1.6",
-              }}
-            />
+          {/* 預覽區：外層不捲動，字數才能固定在右下角 */}
+          <div className="relative flex-1 min-w-0">
+            <div className="h-full overflow-auto bg-white">
+              {/* contain:paint 讓 inline style 的 position:fixed 只能待在預覽區內，蓋不到整個編輯器 */}
+              <div
+                className="p-4 pb-10 prose max-w-none [contain:paint] [overflow-wrap:anywhere]"
+                dangerouslySetInnerHTML={{ __html: currentHtml }}
+                style={{
+                  lineHeight: "1.6",
+                }}
+              />
+            </div>
+            <CharCount html={currentHtml} />
           </div>
         </div>
       </div>
@@ -685,6 +745,186 @@ const MarkdownEditor = () => {
                 確認刪除
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* 分享設定對話框 */}
+      {shareOpen && (
+        <div
+          className="fixed inset-0 bg-black/50 flex items-center justify-center z-50"
+          onClick={() => setShareOpen(false)}
+        >
+          <div
+            className="bg-white rounded-lg p-6 max-w-md w-full mx-4"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-lg font-bold">分享「{currentFile?.name}」</h3>
+              <button
+                onClick={() => setShareOpen(false)}
+                className="p-1 rounded hover:bg-gray-100"
+                title="關閉"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <fieldset className="mb-4">
+              <legend className="text-sm font-semibold mb-2">對方打開後</legend>
+              <label className="flex items-start gap-2 p-2 rounded hover:bg-gray-50 cursor-pointer">
+                <input
+                  type="radio"
+                  name="share-mode"
+                  checked={!shareReadonly}
+                  onChange={() => setShareReadonly(false)}
+                  className="mt-1"
+                />
+                <span>
+                  <span className="font-medium">可編輯</span>
+                  <span className="block text-xs text-gray-500">
+                    直接存成對方的新檔案，對方修改不會影響你的檔案
+                  </span>
+                </span>
+              </label>
+              <label className="flex items-start gap-2 p-2 rounded hover:bg-gray-50 cursor-pointer">
+                <input
+                  type="radio"
+                  name="share-mode"
+                  checked={shareReadonly}
+                  onChange={() => setShareReadonly(true)}
+                  className="mt-1"
+                />
+                <span>
+                  <span className="font-medium">唯讀</span>
+                  <span className="block text-xs text-gray-500">
+                    只顯示預覽，對方要按「存成我的檔案」才能編輯。這只是畫面模式，無法防止對方取得全文
+                  </span>
+                </span>
+              </label>
+            </fieldset>
+
+            <label className="block mb-6">
+              <span className="text-sm font-semibold">密碼（選填）</span>
+              <input
+                type="text"
+                autoComplete="off"
+                value={sharePassword}
+                onChange={(e) => setSharePassword(e.target.value)}
+                placeholder="留空則不加密"
+                className="mt-1 w-full border rounded px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-purple-400"
+              />
+              <span className="block mt-1 text-xs text-gray-500">
+                設定後內容會加密，要用其他管道把密碼告訴對方。忘記密碼就無法打開，建議
+                8 個字以上
+              </span>
+            </label>
+
+            <button
+              onClick={shareLink}
+              className="w-full flex items-center justify-center px-4 py-2 bg-purple-600 text-white rounded hover:bg-purple-700"
+            >
+              {shared ? (
+                <>
+                  <Check size={16} className="mr-2" />
+                  已複製連結
+                </>
+              ) : (
+                <>
+                  {sharePassword ? (
+                    <Lock size={16} className="mr-2" />
+                  ) : (
+                    <Copy size={16} className="mr-2" />
+                  )}
+                  複製連結
+                </>
+              )}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* 加密連結：輸入密碼 */}
+      {lockedPayload && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+          <form
+            onSubmit={unlockShare}
+            className="bg-white rounded-lg p-6 max-w-md w-full mx-4"
+          >
+            <h3 className="flex items-center text-lg font-bold mb-2">
+              <Lock size={18} className="mr-2" />
+              這份分享文件有密碼
+            </h3>
+            <p className="text-sm text-gray-600 mb-4">
+              請輸入分享者提供的密碼。
+            </p>
+            <input
+              type="password"
+              autoFocus
+              value={unlockPassword}
+              onChange={(e) => setUnlockPassword(e.target.value)}
+              className="w-full border rounded px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-purple-400"
+            />
+            {unlockError && (
+              <p className="mt-2 text-sm text-red-600">{unlockError}</p>
+            )}
+            <div className="flex justify-end gap-3 mt-6">
+              <button
+                type="button"
+                onClick={cancelUnlock}
+                className="px-4 py-2 bg-gray-300 text-gray-800 rounded hover:bg-gray-400"
+              >
+                取消
+              </button>
+              <button
+                type="submit"
+                disabled={!unlockPassword || unlocking}
+                className="px-4 py-2 bg-purple-600 text-white rounded hover:bg-purple-700 disabled:opacity-50"
+              >
+                {unlocking ? "解密中…" : "打開"}
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
+
+      {/* 唯讀連結：整頁預覽 */}
+      {viewDoc && (
+        <div className="fixed inset-0 z-40 flex flex-col bg-white">
+          <div className="border-b px-4 py-2 flex items-center justify-between gap-2">
+            <div className="flex items-center gap-2 min-w-0">
+              <span className="flex items-center shrink-0 px-2 py-0.5 rounded bg-gray-100 text-xs text-gray-600">
+                <Eye size={14} className="mr-1" />
+                唯讀
+              </span>
+              <h1 className="text-lg font-semibold truncate">{viewDoc.name}</h1>
+            </div>
+            <div className="flex items-center gap-2 shrink-0">
+              <button
+                onClick={saveViewDoc}
+                className="flex items-center px-3 py-1 bg-blue-600 text-white rounded hover:bg-blue-700"
+              >
+                <Plus size={16} className="mr-2" />
+                存成我的檔案
+              </button>
+              <button
+                onClick={() => setViewDoc(null)}
+                className="flex items-center px-3 py-1 bg-gray-200 text-gray-800 rounded hover:bg-gray-300"
+              >
+                <X size={16} className="mr-2" />
+                關閉
+              </button>
+            </div>
+          </div>
+          <div className="relative flex-1 min-h-0">
+            <div className="h-full overflow-auto">
+              <div
+                className="mx-auto max-w-3xl p-6 pb-10 prose [contain:paint] [overflow-wrap:anywhere]"
+                dangerouslySetInnerHTML={{ __html: viewHtml }}
+                style={{ lineHeight: "1.6" }}
+              />
+            </div>
+            <CharCount html={viewHtml} />
           </div>
         </div>
       )}
@@ -769,5 +1009,12 @@ const MarkdownEditor = () => {
     </div>
   );
 };
+
+// 預覽區右下角的字數
+const CharCount = ({ html }) => (
+  <div className="pointer-events-none absolute bottom-2 right-4 rounded bg-white/90 px-2 py-0.5 text-xs text-gray-500 tabular-nums">
+    {countChars(html)} 字
+  </div>
+);
 
 export default MarkdownEditor;
