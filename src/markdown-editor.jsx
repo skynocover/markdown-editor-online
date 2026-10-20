@@ -37,6 +37,7 @@ import {
 } from "./share";
 import { toZip, fromZip } from "./backup";
 import { isAutoNamed, nameFromContent } from "./file-name";
+import { tsvToTable, padTable } from "./paste-table";
 import { isSlides, loadMarp, stripImports, SLIDES_TEMPLATE } from "./slides";
 
 const REPO_URL = "https://github.com/skynocover/markdown-editor-online";
@@ -436,6 +437,17 @@ const MarkdownEditor = () => {
         };
       }),
     );
+  };
+
+  // 從試算表貼上轉成表格：要有 HTML 表格才轉，Tab 縮排的程式碼和「貼上為純文字」都沒有
+  // 用 execCommand 插入才會進原生的復原紀錄；回傳 false 就讓瀏覽器照原樣貼上
+  const pasteTable = (e) => {
+    if (!/<table/i.test(e.clipboardData.getData("text/html"))) return;
+    const table = tsvToTable(e.clipboardData.getData("text/plain"));
+    if (!table) return;
+    const { value, selectionStart, selectionEnd } = e.target;
+    const text = padTable(table, value.slice(0, selectionStart), value.slice(selectionEnd));
+    if (document.execCommand("insertText", false, text)) e.preventDefault();
   };
 
   const exportFile = () => {
@@ -872,6 +884,7 @@ const MarkdownEditor = () => {
             <textarea
               value={currentContent}
               onChange={(e) => updateFileContent(e.target.value)}
+              onPaste={pasteTable}
               className="w-full h-full p-4 bg-gray-50 font-mono text-sm leading-[1.7] resize-none outline-none"
               placeholder="在此輸入 Markdown..."
             />
@@ -1171,6 +1184,28 @@ const MarkdownEditor = () => {
         }
         .prose em {
           font-style: italic;
+        }
+        /* 欄位太多時表格自己橫向捲動，不撐開預覽
+           overflow-wrap 要改回 normal：預覽的 anywhere 會讓每格最窄壓到一個字，表格永遠擠得進去、不會捲動 */
+        .prose table {
+          overflow-wrap: normal;
+          display: block;
+          width: max-content;
+          max-width: 100%;
+          overflow-x: auto;
+          border-collapse: collapse;
+          margin-bottom: 1em;
+        }
+        .prose :is(th, td) {
+          border: 1px solid #ddd;
+          padding: 0.4em 0.8em;
+        }
+        .prose th {
+          background-color: #f4f4f4;
+          font-weight: bold;
+        }
+        .prose tbody tr:nth-child(even) {
+          background-color: #fafafa;
         }
         .slides svg[data-marpit-svg] {
           display: block;

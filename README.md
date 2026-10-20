@@ -10,6 +10,7 @@
 
 - 左邊寫 Markdown，右邊即時預覽（[marked](https://marked.js.org/)，單換行就會換行）
 - 預覽內容經 [DOMPurify](https://github.com/cure53/DOMPurify) 過濾，貼上來路不明的 Markdown 也不會跑出 XSS
+- 從 Excel、Google Sheets 複製表格後貼上，自動轉成 Markdown 表格（第一列當表頭），按一次 Ctrl+Z 就能復原；想貼原文就用「貼上為純文字」（Ctrl+Shift+V，Safari 是 Cmd+Option+Shift+V）
 - 右下角顯示字數：只算預覽後看得到的字，不算 Markdown 符號和空白，組合 emoji 算一個字
 - 一鍵複製 Markdown 原文，或把目前檔案下載成 `.md`
 
