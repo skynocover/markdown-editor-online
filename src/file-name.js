@@ -1,4 +1,6 @@
 // 自動檔名：使用者沒改過檔名的檔案，用第一行的前幾個字當檔名
+import { isSlides, stripFrontMatter } from "./slides.js";
+
 const graphemes = new Intl.Segmenter();
 
 export const AUTO_NAME_LENGTH = 20;
@@ -9,7 +11,15 @@ export const isAutoNamed = (file) =>
 
 // 回傳 "前幾個字.md"；第一行沒有字時回傳 null（保留原本檔名）
 export const nameFromContent = (content) => {
-  const line = content.split("\n").find((l) => l.trim()) ?? "";
+  // 簡報跳過 front matter、<!-- 指令 -->（可能跨行）、<style> 區塊和整行的背景圖 ![bg](…)
+  // 一般文件不跳：內文寫到 <style 會一路刪到後面程式碼區塊裡的 </style>
+  const body = isSlides(content)
+    ? stripFrontMatter(content).replace(
+        /<!--[\s\S]*?-->|<style[\s\S]*?<\/style>|^(\s*!\[bg\b[^\]]*\]\([^)]*\))+\s*$/gm,
+        "",
+      )
+    : content;
+  const line = body.split("\n").find((l) => l.trim()) ?? "";
   const text = line
     .replace(/^\s*(#{1,6}|>|[-*+]( \[[ xX]\])?|\d+[.)])\s+/, "") // 標題、引用、清單、待辦
     .replace(/!?\[([^\]]*)\]\([^)]*\)/g, "$1") // 連結、圖片只留文字

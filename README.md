@@ -21,13 +21,20 @@
 - 「全部匯出」把所有檔案打包成 zip，資料夾對應到 zip 裡的目錄，之後可以原樣匯回來
 - 側邊欄可以收合，專心寫字
 
+### 簡報
+
+- 側邊欄「新增簡報」會建一份範本；或在檔案開頭加上 front matter `marp: true`，預覽就會變成投影片
+- 用 [Marp](https://marp.app/) 語法：`---` 分頁、`theme: gaia` 換主題、`<!-- _class: lead -->` 置中標題頁、`![bg right:40%](圖片)` 左文右圖、`paginate: true` 頁碼
+- 「播放」全螢幕放映：← → 或空白鍵換頁、點畫面左側上一頁，Esc 離開；唯讀分享連結也能播放
+- Marp 只有遇到簡報才載入（約 1.2MB gzip），一般文件不受影響
+
 ### 分享連結
 
 ![分享對話框](docs/share.png)
 
 - **可編輯**：對方打開後直接存成自己的新檔案，改了也不會動到你的
 - **唯讀**：對方只看到預覽，要按「存成我的檔案」才能編輯（這只是畫面模式，不是權限，拿到連結就拿得到全文）
-- **密碼**：填了就用 AES-GCM 加密，金鑰由密碼經 PBKDF2（60 萬次）產生。密碼要用別的管道告訴對方
+- **密碼**：填了就用 AES-GCM 加密，金鑰由密碼經 PBKDF2（60 萬次）產生。密碼要用別的管道告訴對方（原理見 [docs/share-encryption.md](docs/share-encryption.md)）
 
 對方用唯讀連結打開時看到的畫面：
 
@@ -52,7 +59,7 @@ pnpm lint
 node --test src/*.test.js
 ```
 
-技術：React 19、Vite、Tailwind CSS 4、marked、DOMPurify、fflate（zip）、lucide-react（圖示）。
+技術：React 19、Vite、Tailwind CSS 4、marked、Marp（簡報）、DOMPurify、fflate（zip）、lucide-react（圖示）。
 
 主要檔案：
 
@@ -62,6 +69,11 @@ node --test src/*.test.js
 | `src/share.js` | 分享連結的壓縮、加密與解碼 |
 | `src/backup.js` | 全部匯出／匯入 zip |
 | `src/file-name.js` | 從內容產生自動檔名 |
+| `src/slides.js` | 判斷是否為簡報、延遲載入 Marp、簡報範本 |
+
+## 靈感來源
+
+靈感來自 [Tiny Little Office](https://tinylittleoffice.com/#/)。
 
 ## License
 

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useLayoutEffect, useMemo, useRef } from "react";
 import {
   FileText,
   Plus,
@@ -22,6 +22,9 @@ import {
   Github,
   PanelLeftClose,
   PanelLeftOpen,
+  MoreHorizontal,
+  Play,
+  Presentation,
 } from "lucide-react";
 import { marked } from "marked";
 import DOMPurify from "dompurify";
@@ -34,6 +37,7 @@ import {
 } from "./share";
 import { toZip, fromZip } from "./backup";
 import { isAutoNamed, nameFromContent } from "./file-name";
+import { isSlides, loadMarp, stripImports, SLIDES_TEMPLATE } from "./slides";
 
 const REPO_URL = "https://github.com/skynocover/markdown-editor-online";
 
@@ -60,6 +64,30 @@ const parseMarkdown = (markdown) =>
   DOMPurify.sanitize(marked.parse(markdown, { breaks: true }), {
     FORBID_TAGS: ["style"],
   });
+
+// 簡報：Marp 把投影片裡的 <style> 抽成 css，並限定在 div.marpit 底下，HTML 一樣過 DOMPurify
+// foreignObject：Marp 用 SVG 縮放投影片、排左右分割的背景圖
+// 投影片內容是 foreignObject 裡的 HTML，DOMPurify 預設會整段刪掉，要把它列為 HTML 整合點（規格本來就是）
+const renderSlides = (marp, markdown) => {
+  const { html, css } = marp.render(markdown);
+  return {
+    slides: true,
+    html: DOMPurify.sanitize(html, {
+      ADD_TAGS: ["foreignObject", "mjx-container"],
+      ADD_ATTR: ["jax"], // Marp 的 MathJax 樣式都用 mjx-container[jax="SVG"] 選
+      FORBID_TAGS: ["style"],
+      HTML_INTEGRATION_POINTS: { "annotation-xml": true, foreignobject: true },
+    }),
+    css: stripImports(css),
+  };
+};
+
+// 簡報引擎還沒載入前先顯示空白，載入後 setMarp 觸發重新 render
+const render = (marp, markdown) => {
+  if (!isSlides(markdown)) return { html: parseMarkdown(markdown) };
+  if (!marp) return { slides: true, html: "", css: "" };
+  return renderSlides(marp, markdown);
+};
 
 // 字數以字素計：👍🏽、👨‍👩‍👧 這類組合 emoji 也只算一個字
 const graphemes = new Intl.Segmenter();
@@ -141,6 +169,9 @@ const MarkdownEditor = () => {
   const [unlocking, setUnlocking] = useState(false);
   const [draggingId, setDraggingId] = useState(null); // 正在拖曳的檔案 ID
   const [dragOver, setDragOver] = useState(null); // 拖曳經過的目標：資料夾 ID 或 "root"
+  const [marp, setMarp] = useState(null); // 簡報引擎，第一次遇到簡報才載入
+  const [presenting, setPresenting] = useState(null); // 正在播放的簡報 { html, css }
+  const importInput = useRef(null);
 
   // 自動同步到 localStorage
   const quotaAlerted = useRef(false); // 空間不足只提醒一次，不要每打一個字就跳
@@ -266,8 +297,27 @@ const MarkdownEditor = () => {
 
   const currentFile = files.find((f) => f.id === currentFileId);
   const currentContent = currentFile?.content || "";
-  const currentHtml = parseMarkdown(currentContent);
-  const viewHtml = viewDoc ? parseMarkdown(viewDoc.content) : "";
+  // useMemo：Marp 一次要十幾 ms，別讓打分享密碼、開選單這類無關的 state 變動也重排
+  const current = useMemo(() => render(marp, currentContent), [currentContent, marp]);
+  const viewContent = viewDoc?.content;
+  const view = useMemo(
+    () => (viewContent == null ? null : render(marp, viewContent)),
+    [viewContent, marp],
+  );
+
+  const needMarp = current.slides || !!view?.slides;
+  useEffect(() => {
+    if (needMarp && !marp)
+      loadMarp()
+        .then(setMarp)
+        .catch(() => alert("簡報模組載入失敗，請檢查網路後重新整理"));
+  }, [needMarp, marp]);
+
+  // 在點擊當下要求全螢幕（瀏覽器只允許使用者操作觸發）；iPhone 不支援，照樣整頁覆蓋播放
+  const startPresenting = (doc) => {
+    setPresenting(doc);
+    document.documentElement.requestFullscreen?.().catch(() => {});
+  };
 
   // 新增/匯入到收合的資料夾時展開它，不然新檔案在側邊欄看不到
   const expandFolder = (id) =>
@@ -275,12 +325,12 @@ const MarkdownEditor = () => {
       prev.map((d) => (d.id === id ? { ...d, collapsed: false } : d)),
     );
 
-  const createNewFile = (folderId = null) => {
+  const createNewFile = (folderId = null, content = "") => {
     if (folderId) expandFolder(folderId);
     const newFile = {
       id: nextId,
-      name: `新檔案${nextId}.md`,
-      content: "",
+      name: nameFromContent(content) ?? `新檔案${nextId}.md`,
+      content,
       folderId,
       autoName: true, // 打字後用第一行當檔名，使用者改過檔名就停止
     };
@@ -544,7 +594,7 @@ const MarkdownEditor = () => {
     <div className="flex h-screen bg-gray-100">
       {/* 側邊欄（唯讀預覽蓋住時設 inert，Tab 才不會跑到底下改到檔案） */}
       <div
-        inert={!!viewDoc}
+        inert={!!(viewDoc || presenting)}
         className={`bg-gray-800 text-white transition-all duration-300 ${
           sidebarCollapsed ? "w-0" : "w-64"
         } overflow-hidden`}
@@ -553,7 +603,7 @@ const MarkdownEditor = () => {
           {/* 固定在上方，不隨列表捲動 */}
           <div className="shrink-0 h-14 px-4 border-b border-gray-700 flex items-center justify-between">
             <h2 className="text-xl font-bold">檔案管理</h2>
-            {/* 新增類放一組，匯出另一組，中間用分隔線隔開 */}
+            {/* 常用的新增直接放外面，匯入／匯出收進「⋯」 */}
             <div className="flex items-center gap-0.5">
               <button
                 onClick={() => createNewFile()}
@@ -563,36 +613,57 @@ const MarkdownEditor = () => {
                 <Tip text="新增檔案" />
               </button>
               <button
+                onClick={() => createNewFile(null, SLIDES_TEMPLATE)}
+                className="group/tip relative p-1.5 hover:bg-gray-700 rounded"
+              >
+                <Presentation size={18} />
+                <Tip text="新增簡報" />
+              </button>
+              <button
                 onClick={createFolder}
                 className="group/tip relative p-1.5 hover:bg-gray-700 rounded"
               >
                 <FolderPlus size={18} />
                 <Tip text="新增資料夾" />
               </button>
-              {/* 拖曳以外的匯入方式：觸控裝置、鍵盤使用者 */}
-              <label className="group/tip relative p-1.5 hover:bg-gray-700 rounded cursor-pointer focus-within:ring-2 focus-within:ring-blue-400">
-                <Upload size={18} />
-                <Tip text="匯入 .md 或 .zip" />
-                <input
-                  type="file"
-                  accept=".md,.markdown,.txt,.zip"
-                  multiple
-                  aria-label="匯入 .md 或 .zip"
-                  onChange={(e) => {
-                    importFiles(e.target.files, null);
-                    e.target.value = ""; // 讓同一個檔案可以再匯入一次
-                  }}
-                  className="sr-only"
-                />
-              </label>
-              <div className="w-px h-5 bg-gray-600 mx-1" />
               <button
-                onClick={exportAll}
+                popoverTarget="more-menu"
+                aria-label="匯入／匯出"
                 className="group/tip relative p-1.5 hover:bg-gray-700 rounded"
               >
-                <Archive size={18} />
-                <Tip text="全部匯出 zip（可拖回還原）" align="right" />
+                <MoreHorizontal size={18} />
+                <Tip text="匯入／匯出" align="right" />
               </button>
+              {/* 原生 popover：點外面、按 Esc 自動關閉，開在 top layer 不會被側邊欄的 overflow-hidden 切掉 */}
+              {/* ponytail: 位置寫死在側邊欄右上（w-64 扣 px-4），側邊欄改寬度要跟著改；要跟著按鈕走再換 CSS anchor positioning */}
+              <div
+                id="more-menu"
+                popover="auto"
+                className="fixed top-13 left-4 right-auto bottom-auto m-0 w-56 rounded border-0 bg-gray-700 px-0 py-1 text-sm text-white shadow-lg"
+              >
+                <MenuItem
+                  icon={<Upload size={16} className="shrink-0" />}
+                  text="匯入 .md 或 .zip"
+                  onClick={() => importInput.current.click()}
+                />
+                <MenuItem
+                  icon={<Archive size={16} className="shrink-0" />}
+                  text="全部匯出 zip"
+                  hint="可拖回側邊欄還原"
+                  onClick={exportAll}
+                />
+              </div>
+              <input
+                ref={importInput}
+                type="file"
+                accept=".md,.markdown,.txt,.zip"
+                multiple
+                onChange={(e) => {
+                  importFiles(e.target.files, null);
+                  e.target.value = ""; // 讓同一個檔案可以再匯入一次
+                }}
+                className="hidden"
+              />
             </div>
           </div>
 
@@ -716,7 +787,7 @@ const MarkdownEditor = () => {
       </div>
 
       {/* 主要內容區 */}
-      <div inert={!!viewDoc} className="flex-1 min-w-0 flex flex-col">
+      <div inert={!!(viewDoc || presenting)} className="flex-1 min-w-0 flex flex-col">
         {/* 工具列 */}
         <div className="shrink-0 h-14 bg-white border-b px-4 flex items-center justify-between gap-4">
           <div className="flex items-center gap-2 min-w-0">
@@ -740,6 +811,9 @@ const MarkdownEditor = () => {
             </h1>
           </div>
           <div className="flex items-center gap-2 shrink-0">
+            {current.slides && marp && (
+              <PlayButton onClick={() => startPresenting(current)} />
+            )}
             {/* 複製按鈕 */}
             <button
               onClick={copyContent}
@@ -806,16 +880,10 @@ const MarkdownEditor = () => {
           {/* 預覽區：外層不捲動，字數才能固定在右下角 */}
           <div className="relative flex-1 min-w-0">
             <div className="h-full overflow-auto bg-white">
-              {/* contain:paint 讓 inline style 的 position:fixed 只能待在預覽區內，蓋不到整個編輯器 */}
-              <div
-                className="mx-auto max-w-[70ch] p-6 pb-10 prose [contain:paint] [overflow-wrap:anywhere]"
-                dangerouslySetInnerHTML={{ __html: currentHtml }}
-                style={{
-                  lineHeight: "1.6",
-                }}
-              />
+              {/* 唯讀預覽開著時不放這份的 CSS：兩份簡報同在 div.marpit 底下，只設在這份的屬性會漏到上面 */}
+              <Preview doc={viewDoc ? { ...current, css: "" } : current} width="max-w-[70ch]" />
             </div>
-            <CharCount html={currentHtml} />
+            <CharCount html={current.html} />
           </div>
         </div>
       </div>
@@ -988,7 +1056,7 @@ const MarkdownEditor = () => {
 
       {/* 唯讀連結：整頁預覽 */}
       {viewDoc && (
-        <div className="fixed inset-0 z-40 flex flex-col bg-white">
+        <div inert={!!presenting} className="fixed inset-0 z-40 flex flex-col bg-white">
           <div className="border-b px-4 py-2 flex items-center justify-between gap-2">
             <div className="flex items-center gap-2 min-w-0">
               <span className="flex items-center shrink-0 px-2 py-0.5 rounded bg-gray-100 text-xs text-gray-600">
@@ -998,6 +1066,9 @@ const MarkdownEditor = () => {
               <h1 className="text-lg font-semibold truncate">{viewDoc.name}</h1>
             </div>
             <div className="flex items-center gap-2 shrink-0">
+              {view.slides && marp && (
+                <PlayButton onClick={() => startPresenting(view)} />
+              )}
               <button
                 onClick={saveViewDoc}
                 className="flex items-center px-3 py-1 bg-blue-600 text-white rounded hover:bg-blue-700"
@@ -1016,16 +1087,14 @@ const MarkdownEditor = () => {
           </div>
           <div className="relative flex-1 min-h-0">
             <div className="h-full overflow-auto">
-              <div
-                className="mx-auto max-w-3xl p-6 pb-10 prose [contain:paint] [overflow-wrap:anywhere]"
-                dangerouslySetInnerHTML={{ __html: viewHtml }}
-                style={{ lineHeight: "1.6" }}
-              />
+              <Preview doc={view} width="max-w-3xl" />
             </div>
-            <CharCount html={viewHtml} />
+            <CharCount html={view.html} />
           </div>
         </div>
       )}
+
+      {presenting && <Presenter doc={presenting} onExit={() => setPresenting(null)} />}
 
       {/* 樣式 */}
       <style>{`
@@ -1103,6 +1172,30 @@ const MarkdownEditor = () => {
         .prose em {
           font-style: italic;
         }
+        .slides svg[data-marpit-svg] {
+          display: block;
+          width: 100%;
+          height: auto;
+          margin-bottom: 1.5rem;
+          box-shadow: 0 1px 4px rgb(0 0 0 / 0.25);
+        }
+        /* Tailwind 的 preflight 清掉了清單符號、標題粗細、行內圖片：投影片裡還原成瀏覽器預設，Marp 主題有設的照樣蓋過 */
+        .marpit section :is(ul, ol) {
+          list-style: revert;
+          padding-left: revert;
+        }
+        .marpit section :is(h1, h2, h3, h4, h5, h6) {
+          font-weight: revert;
+        }
+        .marpit section img,
+        .marpit mjx-container > svg {
+          display: revert;
+        }
+        .presenter svg[data-marpit-svg] {
+          display: block;
+          width: 100vw;
+          height: 100dvh; /* iPhone 工具列不會擋到投影片底部 */
+        }
       `}</style>
     </div>
   );
@@ -1122,6 +1215,130 @@ const Tip = ({ text, align = "center" }) => (
   >
     {text}
   </span>
+);
+
+// 預覽：一般文件用 prose 排版，簡報一張張往下疊
+// 唯讀預覽、播放畫面都在 DOM 後面，各自的 <style> 會蓋過底下編輯器預覽的主題
+// contain:paint 讓 inline style 的 position:fixed 只能待在預覽區內，蓋不到整個編輯器
+const Preview = ({ doc, width }) =>
+  doc.slides ? (
+    <div className="slides p-6 pb-10 [contain:paint]">
+      <style>{doc.css}</style>
+      <div dangerouslySetInnerHTML={{ __html: doc.html }} />
+    </div>
+  ) : (
+    <div
+      className={`mx-auto ${width} p-6 pb-10 prose [contain:paint] [overflow-wrap:anywhere]`}
+      dangerouslySetInnerHTML={{ __html: doc.html }}
+      style={{ lineHeight: "1.6" }}
+    />
+  );
+
+const PlayButton = ({ onClick }) => (
+  <button
+    onClick={onClick}
+    className="group/tip relative flex items-center px-3 py-1.5 text-sm text-gray-700 border border-gray-300 rounded hover:bg-gray-50"
+  >
+    <Play size={16} className="mr-2" />
+    播放
+    <Tip text="全螢幕播放簡報（← → 換頁，Esc 離開）" />
+  </button>
+);
+
+// 全螢幕時讓瀏覽器退出，fullscreenchange 再關掉播放畫面；沒有全螢幕（iPhone）就直接關
+const exitPresenting = (onExit) =>
+  document.fullscreenElement ? document.exitFullscreen() : onExit();
+
+const NEXT_KEYS = ["ArrowRight", "ArrowDown", "PageDown", " ", "Enter"];
+const PREV_KEYS = ["ArrowLeft", "ArrowUp", "PageUp", "Backspace"];
+
+// 播放簡報：一次顯示一張；點畫面左三分之一上一頁，其他地方下一頁
+const Presenter = ({ doc, onExit }) => {
+  const ref = useRef(null);
+  const [page, setPage] = useState(0);
+  // 數 DOM 節點，不數 HTML 字串：投影片內容裡也可能出現 data-marpit-svg 這幾個字
+  const [total, setTotal] = useState(0);
+  useLayoutEffect(
+    () => setTotal(ref.current.querySelectorAll("svg[data-marpit-svg]").length),
+    [doc],
+  );
+  const go = (delta) =>
+    setPage((p) => Math.min(Math.max(p + delta, 0), total - 1));
+
+  // 搶走編輯區的焦點，按鍵才不會打進 textarea；只在打開時搶一次，不然焦點在「結束播放」上換頁會被拉回來
+  useEffect(() => ref.current.focus(), []);
+
+  // 不給依賴：每次 render 重掛，go、total、onExit 才是最新的
+  useEffect(() => {
+    const onKey = (e) => {
+      // 焦點在按鈕、連結上時，Enter／空白鍵留給它們自己（結束播放、開連結）
+      if ((e.key === "Enter" || e.key === " ") && e.target.closest("button, a")) return;
+      if (NEXT_KEYS.includes(e.key)) go(1);
+      else if (PREV_KEYS.includes(e.key)) go(-1);
+      else if (e.key === "Home") go(-total);
+      else if (e.key === "End") go(total);
+      else if (e.key === "Escape") exitPresenting(onExit);
+      else return;
+      e.preventDefault();
+    };
+    // 全螢幕時按 Esc 是瀏覽器自己退出，收不到 keydown
+    const onFullscreen = () => !document.fullscreenElement && onExit();
+    window.addEventListener("keydown", onKey);
+    document.addEventListener("fullscreenchange", onFullscreen);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      document.removeEventListener("fullscreenchange", onFullscreen);
+    };
+  });
+
+  return (
+    <div
+      ref={ref}
+      tabIndex={-1}
+      onClick={(e) => {
+        if (e.target.closest("a")) return; // 點連結就是開連結，不翻頁
+        go(e.clientX < innerWidth / 3 ? -1 : 1);
+      }}
+      className="presenter fixed inset-0 z-[60] bg-black outline-none select-none"
+    >
+      <style>
+        {doc.css}
+        {`.presenter svg[data-marpit-svg]:not(:nth-of-type(${page + 1})) { display: none; }`}
+      </style>
+      <div dangerouslySetInnerHTML={{ __html: doc.html }} />
+      <div className="absolute bottom-3 right-3 flex items-center gap-2 text-xs text-white/60 opacity-30 hover:opacity-100 transition-opacity">
+        <span className="tabular-nums">
+          {page + 1} / {total}
+        </span>
+        <button
+          onClick={(e) => {
+            e.stopPropagation();
+            exitPresenting(onExit);
+          }}
+          className="p-1.5 rounded bg-white/10 hover:bg-white/20"
+          aria-label="結束播放"
+        >
+          <X size={16} />
+        </button>
+      </div>
+    </div>
+  );
+};
+
+// 點了順便關掉「⋯」選單
+const MenuItem = ({ icon, text, hint, onClick }) => (
+  <button
+    onClick={onClick}
+    popoverTarget="more-menu"
+    popoverTargetAction="hide"
+    className="flex w-full items-center gap-2 px-3 py-2 text-left hover:bg-gray-600 focus-visible:bg-gray-600 outline-none"
+  >
+    {icon}
+    <span>
+      {text}
+      {hint && <span className="block text-xs text-gray-400">{hint}</span>}
+    </span>
+  </button>
 );
 
 // 預覽區右下角的字數
