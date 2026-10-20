@@ -7,9 +7,9 @@ const MAX_TOTAL_SIZE = 50_000_000;
 
 const TEXT_FILE = /\.(md|markdown|txt)$/i;
 
-// 檔名裡的 / \ 會被當成目錄，換掉；開頭的 . 會被還原當成隱藏檔略過，拿掉
+// 檔名裡的 / \ 會被當成目錄，| : * ? " < > Windows 解壓不了，都換掉；開頭的 . 會被還原當成隱藏檔略過，拿掉
 const safeName = (name) =>
-  name.replace(/[/\\]/g, "_").replace(/^\.+/, "").trim() || "未命名";
+  name.replace(/[/\\|:*?"<>]/g, "_").replace(/^\.+/, "").trim() || "未命名";
 
 // 沒有 UTF-8 旗標的 zip（Finder、ditto 壓的）檔名會被 fflate 當 latin1 解：還原成原始位元組再試 UTF-8
 const fixName = (name) => {

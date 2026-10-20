@@ -24,7 +24,8 @@ export const nameFromContent = (content) => {
     .replace(/^\s*(#{1,6}|>|[-*+]( \[[ xX]\])?|\d+[.)])\s+/, "") // 標題、引用、清單、待辦
     .replace(/!?\[([^\]]*)\]\([^)]*\)/g, "$1") // 連結、圖片只留文字
     .replace(/[*_~`]/g, "") // 粗體、斜體、刪除線、行內程式碼
-    .replace(/[/\\]/g, " ") // 檔名不能有斜線
+    .replace(/[/\\|:*?"<>]/g, " ") // Windows 檔名不允許的字元，表格表頭會帶 |
+    .replace(/\s+/g, " ")
     .trim();
   if (!text) return null;
   const head = [...graphemes.segment(text)]

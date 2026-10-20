@@ -16,6 +16,8 @@ test("取第一個非空行，去掉 Markdown 符號", () => {
     "官網 介紹.md",
   );
   assert.equal(nameFromContent("a/b\\c"), "a b c.md");
+  assert.equal(nameFromContent("| 名稱 | 價格 |\n| --- | --- |"), "名稱 價格.md");
+  assert.equal(nameFromContent('Q: 為什麼? "好"'), "Q 為什麼 好.md");
 });
 
 test("簡報跳過 front matter 和指令註解", () => {
@@ -66,6 +68,6 @@ test("簡報跳過整行背景圖；一般文件不刪 <style 之後的內容", 
   );
   assert.equal(
     nameFromContent("如何用 <style> 標籤\n\n內文\n\n```html\n</style>\n```"),
-    "如何用 <style> 標籤.md",
+    "如何用 style 標籤.md",
   );
 });

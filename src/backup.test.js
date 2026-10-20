@@ -11,6 +11,7 @@ test("匯出再還原：內容、資料夾都保留，同名檔案不會互相�
     { id: 2, name: "a.md", content: "第二個同名", folderId: null },
     { id: 3, name: "b.md", content: "資料夾裡", folderId: 10 },
     { id: 4, name: "x/y.md", content: "檔名有斜線", folderId: null },
+    { id: 5, name: "Q: why?.md", content: "Windows 不允許的字元", folderId: null },
   ];
   const restored = fromZip(toZip(files, folders));
   const byPath = Object.fromEntries(
@@ -21,6 +22,7 @@ test("匯出再還原：內容、資料夾都保留，同名檔案不會互相�
     "/a (2).md": "第二個同名",
     "工作/b.md": "資料夾裡",
     "/x_y.md": "檔名有斜線",
+    "/Q_ why_.md": "Windows 不允許的字元",
   });
 });
 
