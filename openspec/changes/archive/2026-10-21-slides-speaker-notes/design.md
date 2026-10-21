@@ -33,10 +33,10 @@
 點「講者模式」時，在同一次點擊裡：
 1. 用 `window.open("", "speaker", ...)` 開一個空白的同源視窗
 2. 把主頁面 `<head>` 裡的樣式表複製過去；`<link>` 用解析後的絕對網址 `link.href`，空白頁的相對路徑不一定解析得到
-3. 用 `createPortal` 把 `SpeakerView` 渲染進那個視窗的 `document.body`
+3. `Presenter` 用 `createPortal` 把 `SpeakerView` 渲染進那個視窗的 `document.body`
 4. 主視窗進入 `Presenter`，不要求全螢幕（原因見下方「全螢幕」）
 
-`page` 從 `Presenter` 移到外層的 state，兩個視窗共用，所以天然就是同步的，不需要訊息傳遞。鍵盤事件在主視窗的 `window` 和 `speakerWindow` 都要掛（`Presenter` 現在只掛主視窗的 `window`），按鍵的意義相同；在講者視窗按 Esc 也是結束播放。
+`SpeakerView` 由 `Presenter` 用 portal 渲染，`page` 留在 `Presenter` 裡兩個視窗共用，所以天然就是同步的，不需要訊息傳遞。鍵盤事件在主視窗的 `window` 和 `speakerWindow` 都要掛（`Presenter` 現在只掛主視窗的 `window`），按鍵的意義相同；在講者視窗按 Esc 也是結束播放。
 - 不用 BroadcastChannel 加獨立頁面：那樣要多一個建置入口，還要自己處理狀態同步。portal 只多一個元件
 - 講者視窗的 `pagehide` 事件只把講者模式關掉；結束播放時呼叫 `speakerWindow.close()`
 
@@ -65,3 +65,4 @@
 - [Safari 的 SVG 縮放 polyfill（`browser()`）只掛在主頁面的 document] → 實作時要確認講者視窗的投影片縮放是否正常；不正常的話，對講者視窗的 document 再呼叫一次 `browser()`
 - [備註會隨著原文一起被分享] → README 和講者模式按鈕的提示文字說明這一點
 - [複製到講者視窗的樣式表在開發模式下會熱更新] → 只影響開發，不處理
+- [編輯器元件裡的 `<style>` 在 body，不會複製到講者視窗] → 投影片要用的樣式（還原 Tailwind preflight 清掉的清單符號等）移到 `index.css`

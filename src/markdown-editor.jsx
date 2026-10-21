@@ -25,8 +25,10 @@ import {
   MoreHorizontal,
   Play,
   Presentation,
+  Maximize,
   Table,
 } from "lucide-react";
+import { createPortal } from "react-dom";
 import { marked } from "marked";
 import DOMPurify from "dompurify";
 import {
@@ -51,6 +53,7 @@ import {
   canPickRef,
 } from "./preview-edit";
 import { TableTools } from "./table-tools";
+import { SpeakerView } from "./speaker-view";
 import { isSlides, loadMarp, stripImports, SLIDES_TEMPLATE } from "./slides";
 
 const REPO_URL = "https://github.com/skynocover/markdown-editor-online";
@@ -96,8 +99,9 @@ const parseMarkdown = (markdown) => {
 // 簡報：Marp 把投影片裡的 <style> 抽成 css，並限定在 div.marpit 底下，HTML 一樣過 DOMPurify
 // foreignObject：Marp 用 SVG 縮放投影片、排左右分割的背景圖
 // 投影片內容是 foreignObject 裡的 HTML，DOMPurify 預設會整段刪掉，要把它列為 HTML 整合點（規格本來就是）
+// notes：講者備註，Marp 依頁分組回傳設定以外的 HTML 註解，每頁串成一個字串
 const renderSlides = (marp, markdown) => {
-  const { html, css } = marp.render(markdown);
+  const { html, css, comments } = marp.render(markdown);
   return {
     slides: true,
     html: DOMPurify.sanitize(html, {
@@ -107,13 +111,14 @@ const renderSlides = (marp, markdown) => {
       HTML_INTEGRATION_POINTS: { "annotation-xml": true, foreignobject: true },
     }),
     css: stripImports(css),
+    notes: comments.map((page) => page.join("\n\n")),
   };
 };
 
 // 簡報引擎還沒載入前先顯示空白，載入後 setMarp 觸發重新 render
 const render = (marp, markdown) => {
   if (!isSlides(markdown)) return { html: parseMarkdown(markdown) };
-  if (!marp) return { slides: true, html: "", css: "" };
+  if (!marp) return { slides: true, html: "", css: "", notes: [] };
   return renderSlides(marp, markdown);
 };
 
@@ -199,6 +204,7 @@ const MarkdownEditor = () => {
   const [dragOver, setDragOver] = useState(null); // 拖曳經過的目標：資料夾 ID 或 "root"
   const [marp, setMarp] = useState(null); // 簡報引擎，第一次遇到簡報才載入
   const [presenting, setPresenting] = useState(null); // 正在播放的簡報 { html, css }
+  const [speaker, setSpeaker] = useState(null); // 講者模式的視窗
   const importInput = useRef(null);
   const editorRef = useRef(null);
   const editingCell = useRef(null); // 預覽裡正在編輯的儲存格
@@ -351,6 +357,39 @@ const MarkdownEditor = () => {
   const startPresenting = (doc) => {
     setPresenting(doc);
     document.documentElement.requestFullscreen?.().catch(() => {});
+  };
+
+  // 講者模式：另開同源的空白視窗，Presenter 用 portal 把講者畫面畫進去，換頁天然同步
+  // window.open 用掉了這次點擊的使用者操作，主視窗要全螢幕得拖到投影機後再按 F
+  const startSpeaker = (doc) => {
+    const win = window.open("", "speaker", "width=1100,height=700");
+    if (!win) {
+      alert("瀏覽器擋掉了講者視窗，請允許這個網站開啟彈出視窗；先用一般模式播放");
+      startPresenting(doc);
+      return;
+    }
+    // 空白頁是 quirks mode（表格不繼承字級等），重寫成有 doctype 的文件；同名視窗還開著時也順便清空
+    // <link> 用解析後的絕對網址，空白頁解析不了相對路徑
+    win.document.open();
+    win.document.write("<!doctype html><title>講者模式</title>");
+    win.document.close();
+    win.document.head.append(
+      ...[...document.head.querySelectorAll("style, link[rel=stylesheet]")].map((node) => {
+        const copy = node.cloneNode(true);
+        if (node.href) copy.href = node.href;
+        return copy;
+      }),
+    );
+    // 只關掉講者視窗：播放照樣繼續
+    win.addEventListener("pagehide", () => setSpeaker(null));
+    setSpeaker(win);
+    setPresenting(doc);
+  };
+
+  const stopPresenting = () => {
+    speaker?.close();
+    setSpeaker(null);
+    setPresenting(null);
   };
 
   // 新增/匯入到收合的資料夾時展開它，不然新檔案在側邊欄看不到
@@ -1083,7 +1122,17 @@ const MarkdownEditor = () => {
           </div>
           <div className="flex items-center gap-2 shrink-0">
             {current.slides && marp && (
-              <PlayButton onClick={() => startPresenting(current)} />
+              <>
+                <PlayButton onClick={() => startPresenting(current)} />
+                <button
+                  onClick={() => startSpeaker(current)}
+                  className="group/tip relative flex items-center px-3 py-1.5 text-sm text-gray-700 border border-gray-300 rounded hover:bg-gray-50"
+                >
+                  <Presentation size={16} className="mr-2" />
+                  講者模式
+                  <Tip text="另開講者視窗顯示備註、下一頁和時間；備註是原文的一部分，分享連結也看得到" />
+                </button>
+              </>
             )}
             <button
               onClick={insertTable}
@@ -1167,6 +1216,7 @@ const MarkdownEditor = () => {
               <Preview
                 doc={viewDoc ? { ...current, css: "" } : current}
                 width="max-w-[70ch]"
+                editable
                 tableEvents={{
                   onClick: toggleTask,
                   onMouseDown: onPreviewMouseDown,
@@ -1406,7 +1456,9 @@ const MarkdownEditor = () => {
         </div>
       )}
 
-      {presenting && <Presenter doc={presenting} onExit={() => setPresenting(null)} />}
+      {presenting && (
+        <Presenter doc={presenting} speaker={speaker} onExit={stopPresenting} />
+      )}
 
       {/* 樣式 */}
       <style>{`
@@ -1531,17 +1583,12 @@ const MarkdownEditor = () => {
           margin-bottom: 1.5rem;
           box-shadow: 0 1px 4px rgb(0 0 0 / 0.25);
         }
-        /* Tailwind 的 preflight 清掉了清單符號、標題粗細、行內圖片：投影片裡還原成瀏覽器預設，Marp 主題有設的照樣蓋過 */
-        .marpit section :is(ul, ol) {
-          list-style: revert;
-          padding-left: revert;
-        }
-        .marpit section :is(h1, h2, h3, h4, h5, h6) {
-          font-weight: revert;
-        }
-        .marpit section img,
-        .marpit mjx-container > svg {
-          display: revert;
+        /* 負的上邊界跟投影片的下邊界合併，備註貼在投影片下方 */
+        .slide-notes {
+          margin: -1rem 0 1.5rem;
+          font-size: 0.875rem;
+          color: #6b7280;
+          white-space: pre-wrap;
         }
         .presenter svg[data-marpit-svg] {
           display: block;
@@ -1572,22 +1619,38 @@ const Tip = ({ text, align = "center" }) => (
 // 預覽：一般文件用 prose 排版，簡報一張張往下疊
 // 唯讀預覽、播放畫面都在 DOM 後面，各自的 <style> 會蓋過底下編輯器預覽的主題
 // contain:paint 讓 inline style 的 position:fixed 只能待在預覽區內，蓋不到整個編輯器
-// tableEvents：只有自己的文件可以在預覽編輯表格，唯讀分享預覽不傳
+// editable：自己的文件可以在預覽編輯表格、看到講者備註，唯讀分享預覽不給
 // innerHTML 物件要記住：每次 render 給新物件，React 會重設 innerHTML，正在編輯的格子就被換掉了
 // 唯讀預覽的 checkbox 沒有 disabled（HTML 跟自己的預覽共用），CSS 擋了滑鼠，這裡擋鍵盤的空白鍵
 const readOnlyEvents = { onClick: (e) => e.target.type === "checkbox" && e.preventDefault() };
 
-const Preview = ({ doc, width, tableEvents }) => {
+const Preview = ({ doc, width, editable, tableEvents }) => {
   const inner = useMemo(() => ({ __html: doc.html }), [doc.html]);
+  const slidesRef = useRef(null);
+  // 備註插在每張投影片後面；只改備註時 html 不變、innerHTML 不會重設，要先清掉舊的
+  // 用 textContent：分享來的內容不可信任，備註不能當成 HTML
+  useLayoutEffect(() => {
+    const root = slidesRef.current;
+    if (!root) return;
+    root.querySelectorAll(".slide-notes").forEach((n) => n.remove());
+    if (!editable) return;
+    root.querySelectorAll("svg[data-marpit-svg]").forEach((svg, i) => {
+      if (!doc.notes?.[i]) return;
+      const notes = document.createElement("div");
+      notes.className = "slide-notes";
+      notes.textContent = doc.notes[i];
+      svg.after(notes);
+    });
+  }, [doc.html, doc.notes, editable]);
   return doc.slides ? (
     <div className="slides p-6 pb-10 [contain:paint]">
       <style>{doc.css}</style>
-      <div dangerouslySetInnerHTML={inner} />
+      <div ref={slidesRef} dangerouslySetInnerHTML={inner} />
     </div>
   ) : (
     <div
-      {...(tableEvents ?? readOnlyEvents)}
-      className={`mx-auto ${width} p-6 pb-10 prose [contain:paint] [overflow-wrap:anywhere] ${tableEvents ? "preview-editable" : ""}`}
+      {...(editable ? tableEvents : readOnlyEvents)}
+      className={`mx-auto ${width} p-6 pb-10 prose [contain:paint] [overflow-wrap:anywhere] ${editable ? "preview-editable" : ""}`}
       dangerouslySetInnerHTML={inner}
       style={{ lineHeight: "1.6" }}
     />
@@ -1612,10 +1675,18 @@ const exitPresenting = (onExit) =>
 const NEXT_KEYS = ["ArrowRight", "ArrowDown", "PageDown", " ", "Enter"];
 const PREV_KEYS = ["ArrowLeft", "ArrowUp", "PageUp", "Backspace"];
 
+const toggleFullscreen = () =>
+  document.fullscreenElement
+    ? document.exitFullscreen()
+    : document.documentElement.requestFullscreen?.().catch(() => {});
+
 // 播放簡報：一次顯示一張；點畫面左三分之一上一頁，其他地方下一頁
-const Presenter = ({ doc, onExit }) => {
+// speaker：講者模式的視窗，講者畫面也由這裡用 portal 畫過去，page 兩邊共用
+const Presenter = ({ doc, speaker, onExit }) => {
   const ref = useRef(null);
   const [page, setPage] = useState(0);
+  // innerHTML 物件要記住：換頁時不用重新解析整份投影片
+  const inner = useMemo(() => ({ __html: doc.html }), [doc.html]);
   // 數 DOM 節點，不數 HTML 字串：投影片內容裡也可能出現 data-marpit-svg 這幾個字
   const [total, setTotal] = useState(0);
   useLayoutEffect(
@@ -1628,6 +1699,13 @@ const Presenter = ({ doc, onExit }) => {
   // 搶走編輯區的焦點，按鍵才不會打進 textarea；只在打開時搶一次，不然焦點在「結束播放」上換頁會被拉回來
   useEffect(() => ref.current.focus(), []);
 
+  // 講者模式是播到一半才切全螢幕，離開全螢幕只回到視窗播放；Esc 直接結束
+  const exit = () => {
+    if (!speaker) return exitPresenting(onExit);
+    if (document.fullscreenElement) document.exitFullscreen();
+    onExit();
+  };
+
   // 不給依賴：每次 render 重掛，go、total、onExit 才是最新的
   useEffect(() => {
     const onKey = (e) => {
@@ -1637,18 +1715,21 @@ const Presenter = ({ doc, onExit }) => {
       else if (PREV_KEYS.includes(e.key)) go(-1);
       else if (e.key === "Home") go(-total);
       else if (e.key === "End") go(total);
-      else if (e.key === "Escape") exitPresenting(onExit);
+      else if (e.key === "Escape") exit();
+      else if ((e.key === "f" || e.key === "F") && !e.metaKey && !e.ctrlKey && speaker)
+        toggleFullscreen();
       else return;
       e.preventDefault();
     };
-    // 全螢幕時按 Esc 是瀏覽器自己退出，收不到 keydown
-    const onFullscreen = () => !document.fullscreenElement && onExit();
-    window.addEventListener("keydown", onKey);
-    document.addEventListener("fullscreenchange", onFullscreen);
-    return () => {
-      window.removeEventListener("keydown", onKey);
-      document.removeEventListener("fullscreenchange", onFullscreen);
-    };
+    // 一般播放一開始就全螢幕，離開全螢幕等於不播了；全螢幕時按 Esc 是瀏覽器自己退出，收不到 keydown
+    const onFullscreen = () => !speaker && !document.fullscreenElement && onExit();
+    // 用 signal 拆：講者視窗點了連結導到別的網站後，再碰它的 removeEventListener 會丟 SecurityError
+    const ctrl = new AbortController();
+    const { signal } = ctrl;
+    window.addEventListener("keydown", onKey, { signal });
+    speaker?.addEventListener("keydown", onKey, { signal });
+    document.addEventListener("fullscreenchange", onFullscreen, { signal });
+    return () => ctrl.abort();
   });
 
   return (
@@ -1656,6 +1737,8 @@ const Presenter = ({ doc, onExit }) => {
       ref={ref}
       tabIndex={-1}
       onClick={(e) => {
+        // portal 的事件沿 React 樹冒上來：講者視窗裡的點擊不在這個 DOM 裡，不算點畫面翻頁
+        if (!e.currentTarget.contains(e.target)) return;
         if (e.target.closest("a")) return; // 點連結就是開連結，不翻頁
         go(e.clientX < innerWidth / 3 ? -1 : 1);
       }}
@@ -1665,15 +1748,27 @@ const Presenter = ({ doc, onExit }) => {
         {doc.css}
         {`.presenter svg[data-marpit-svg]:not(:nth-of-type(${page + 1})) { display: none; }`}
       </style>
-      <div dangerouslySetInnerHTML={{ __html: doc.html }} />
+      <div dangerouslySetInnerHTML={inner} />
       <div className="absolute bottom-3 right-3 flex items-center gap-2 text-xs text-white/60 opacity-30 hover:opacity-100 transition-opacity">
         <span className="tabular-nums">
           {page + 1} / {total}
         </span>
+        {speaker && (
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              toggleFullscreen();
+            }}
+            className="p-1.5 rounded bg-white/10 hover:bg-white/20"
+            aria-label="全螢幕（F）"
+          >
+            <Maximize size={16} />
+          </button>
+        )}
         <button
           onClick={(e) => {
             e.stopPropagation();
-            exitPresenting(onExit);
+            exit();
           }}
           className="p-1.5 rounded bg-white/10 hover:bg-white/20"
           aria-label="結束播放"
@@ -1681,6 +1776,11 @@ const Presenter = ({ doc, onExit }) => {
           <X size={16} />
         </button>
       </div>
+      {speaker &&
+        createPortal(
+          <SpeakerView doc={doc} page={page} total={total} go={go} onExit={exit} />,
+          speaker.document.body,
+        )}
     </div>
   );
 };

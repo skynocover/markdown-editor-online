@@ -57,6 +57,8 @@ paginate: true
 - 第一行的 \`marp: true\` 開啟簡報模式
 - 按右上角「播放」全螢幕，← → 換頁、Esc 離開
 
+<!-- 這是講者備註：一般的 HTML 註解只有預覽和「講者模式」看得到，放映時看不到 -->
+
 ---
 
 ![bg right:40%](https://picsum.photos/id/29/800/900)
