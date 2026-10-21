@@ -2,7 +2,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { marked } from "marked";
-import { evaluateTable, calcTables } from "./table-formula.js";
+import { evaluateTable, calcTables, tableValues } from "./table-formula.js";
 
 // 只算一格：公式放在 A1，其他格照給的資料
 const calc = (formula, rows = [[]]) => {
@@ -155,4 +155,8 @@ test("讀格子的上限整份文件共用：很多個表格各自在上限內�
   const html = render(Array(5).fill(md).join("\n\n"));
   assert.match(html, /499,500/); // 前面的表格照算
   assert.match(html, /=SUM\(A1:A1000\)/); // 後面的表格超過上限，照原文顯示
+});
+
+test("tableValues：每格的值，公式是完整精度", () => {
+  assert.deepEqual(tableValues([["名稱", "=1/3", "", "1,200", "=1/0"]]), [["名稱", 1 / 3, null, 1200, { code: "#ERR" }]]);
 });

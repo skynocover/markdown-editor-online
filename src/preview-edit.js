@@ -1,6 +1,7 @@
 // 在預覽直接編輯：記下表格、checkbox 在原文的位置，改完寫回 Markdown
 import { marked } from "marked";
 import { renderDiagram } from "./diagram.js";
+import { chartSource } from "./table-chart.js";
 
 // 頂層 token 的 raw 串起來就是原文，累加長度就是表格的起點
 // 引用、清單裡的表格不記，點了也不能編輯
@@ -12,11 +13,23 @@ export const markTables = (tokens) => {
   }
 };
 
+// 表格上方有圖表註解（markCharts 記在 token.chart）就在表格下方畫圖；values 是 calcTables 算好的值
+// 錯誤訊息都是自己組的（座標、錯誤碼），不用跳脫
+const chartHtml = ({ chart, values }) => {
+  try {
+    if (!values) throw new Error("表格無法計算");
+    return renderDiagram(chartSource(values, chart));
+  } catch (e) {
+    return `<p class="diagram-error">${e.message}</p>`;
+  }
+};
+
 // 有記位置的表格加上 data-start，預覽點擊時靠它找回原文
 export const previewRenderer = new marked.Renderer();
 previewRenderer.table = function (token) {
-  const html = marked.Renderer.prototype.table.call(this, token);
-  return token.start === undefined ? html : html.replace("<table>", `<table data-start="${token.start}">`);
+  let html = marked.Renderer.prototype.table.call(this, token);
+  if (token.start !== undefined) html = html.replace("<table>", `<table data-start="${token.start}">`);
+  return token.chart ? html + chartHtml(token) : html;
 };
 
 // ```mermaid 畫成圖，其他語言照原本的程式碼區塊
@@ -92,25 +105,25 @@ export const addCol = (t) => {
   t.align.push(null);
 };
 
-// 刪除、移動欄列：order 是新順序裡每個位置原本的索引，公式裡的座標跟著改
-const reorderRows = (t, change) => {
+// 刪除、移動欄列：order 是新順序裡每個位置原本的索引，公式裡的座標跟著改；moved 是搬動的那一列（欄）
+const reorderRows = (t, change, moved) => {
   const order = [...t.grid.keys()];
   change(order);
-  fixRefs(t, 0, t.grid.length, order);
+  fixRefs(t, 0, t.grid.length, order, moved);
   t.grid = order.map((i) => t.grid[i]);
 };
-const reorderCols = (t, change) => {
+const reorderCols = (t, change, moved) => {
   const order = [...t.grid[0].keys()];
   change(order);
-  fixRefs(t, 1, t.grid[0].length, order);
+  fixRefs(t, 1, t.grid[0].length, order, moved);
   t.grid = t.grid.map((row) => order.map((i) => row[i] ?? ""));
   t.align = order.map((i) => t.align[i] ?? null);
 };
 
 export const deleteRow = (t, r) => reorderRows(t, (o) => o.splice(r, 1));
 export const deleteCol = (t, c) => reorderCols(t, (o) => o.splice(c, 1));
-export const moveRow = (t, from, to) => reorderRows(t, (o) => move(o, from, to));
-export const moveCol = (t, from, to) => reorderCols(t, (o) => move(o, from, to));
+export const moveRow = (t, from, to) => reorderRows(t, (o) => move(o, from, to), from);
+export const moveCol = (t, from, to) => reorderCols(t, (o) => move(o, from, to), from);
 
 // 座標或範圍，跟 table-formula 一樣只認 A–Z 欄
 const REF = /\b([A-Z])(\d+)(?::([A-Z])(\d+))?\b/gi;
@@ -118,7 +131,9 @@ const toPos = (col, row) => [Number(row) - 1, col.toUpperCase().charCodeAt(0) - 
 
 // 跟試算表一樣：參照的格子被刪掉 → #REF；範圍的端點被刪掉就往內縮，整個範圍都刪掉才是 #REF
 // k 是要改的軸（0 列、1 欄），n 是原本的數量；表格外的座標（SUM(B2:B100) 預留的空間）照刪掉的數量往前移
-const fixRefs = (t, k, n, order) => {
+// 表格上方的圖表註解（t.chart，編輯器讀表格時放進來）的範圍也一起改
+// 搬動時：其他格的相對順序不變，範圍是它們的新位置；搬動的那一格落在範圍裡或緊鄰兩端才算在內（搬到範圍外就移出）
+const fixRefs = (t, k, n, order, moved) => {
   const map = (i) => (i < n ? order.indexOf(i) : i - n + order.length);
   const fix = (m, c1, r1, c2, r2) => {
     const a = toPos(c1, r1);
@@ -129,14 +144,19 @@ const fixRefs = (t, k, n, order) => {
     const b = toPos(c2, r2);
     let lo = Math.min(a[k], b[k]);
     let hi = Math.max(a[k], b[k]);
-    while (lo <= hi && map(lo) < 0) lo++;
-    while (hi >= lo && map(hi) < 0) hi--;
-    if (lo > hi) return "#REF";
-    a[k] = map(lo);
-    b[k] = map(hi);
+    const p = moved >= lo && moved <= hi ? map(moved) : -1;
+    const keep = (i) => i !== moved && map(i) >= 0;
+    while (lo <= hi && !keep(lo)) lo++;
+    while (hi >= lo && !keep(hi)) hi--;
+    let [s, e] = lo > hi ? [p, p] : [map(lo), map(hi)];
+    if (s < 0) return "#REF";
+    if (p >= s - 1 && p <= e + 1) [s, e] = [Math.min(s, p), Math.max(e, p)];
+    a[k] = s;
+    b[k] = e;
     return rangeRef(a, b);
   };
   t.grid = t.grid.map((row) => row.map((s) => (s.trimStart().startsWith("=") ? s.replace(REF, fix) : s)));
+  if (t.chart) t.chart.range = t.chart.range.replace(REF, fix);
 };
 
 export const colName = (c) => String.fromCharCode(65 + c);

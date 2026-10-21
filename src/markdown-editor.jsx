@@ -53,6 +53,7 @@ import {
 import { TableTools } from "./table-tools";
 import { isSlides, loadMarp, stripImports, SLIDES_TEMPLATE } from "./slides";
 import { loadDiagrams, takePending } from "./diagram";
+import { chartLineLength, markCharts, readChart, writeChart } from "./table-chart";
 
 const REPO_URL = "https://github.com/skynocover/markdown-editor-online";
 
@@ -87,6 +88,7 @@ const parseMarkdown = (markdown) => {
   const tokens = marked.lexer(markdown, MARKED_OPTIONS);
   markTables(tokens);
   markTasks(tokens);
+  markCharts(tokens);
   calcTables(tokens);
   // 禁 <style>：插進來的 CSS 會套到整個編輯器，不只預覽區
   return DOMPurify.sanitize(marked.parser(tokens, MARKED_OPTIONS), {
@@ -566,7 +568,7 @@ const MarkdownEditor = () => {
     const c = el.cellIndex;
     if (!table || table.grid[r]?.[c] === undefined) return;
     editingCell.current = { el, start, r, c, table, html: el.innerHTML };
-    setActiveTable(start);
+    setActiveTable(readChart(currentContent, start)?.start ?? start);
     el.textContent = table.grid[r][c];
     el.contentEditable = "plaintext-only";
     el.focus();
@@ -685,19 +687,31 @@ const MarkdownEditor = () => {
     return () => window.removeEventListener("mouseup", stop);
   }, []);
 
-  // 新增、刪除、移動欄列：正在編輯的格子先一起算進去，整個表格只寫回一次
+  // activeTable 是圖表註解（有的話）或表格的開頭：插入、移除註解或 Ctrl+Z 還原時這個位置不變，表格位置從原文推回來
+  const tableStart = activeTable === null ? null : activeTable + chartLineLength(currentContent, activeTable);
+
+  // 新增、刪除、移動欄列、改圖表：正在編輯的格子先一起算進去，整個表格只寫回一次
+  // 上方的圖表註解（table.chart）跟表格一起寫回，一次 Ctrl+Z 還原；只改圖表時表格照原文，不重新排版
   const editTable = (op) => {
     const edit = editingCell.current;
     let table;
-    if (edit?.start === activeTable) {
+    if (edit?.start === tableStart) {
       table = edit.table;
       table.grid[edit.r][edit.c] = closeCell(edit);
     } else {
-      table = readTable(currentContent, activeTable);
+      table = readTable(currentContent, tableStart);
     }
     if (!table) return;
+    const chart = readChart(currentContent, tableStart);
+    table.chart = chart && { type: chart.type, range: chart.range };
     op(table);
-    replaceText(activeTable, table.end, writeTable(table.grid, table.align));
+    const head = table.chart ? writeChart(table.chart) + "\n" : "";
+    const from = chart?.start ?? tableStart;
+    const text = writeTable(table.grid, table.align);
+    const before = readTable(currentContent, tableStart);
+    const body = text === writeTable(before.grid, before.align) ? currentContent.slice(tableStart, table.end) : text;
+    replaceText(from, table.end, head + body);
+    setActiveTable(from);
   };
 
   // 換檔案時收起表格工具：同一個位置在別的檔案可能是別的表格
@@ -1212,8 +1226,9 @@ const MarkdownEditor = () => {
               {activeTable !== null && previewScroll && (
                 <TableTools
                   container={previewScroll}
-                  start={activeTable}
+                  start={tableStart}
                   html={current.html}
+                  chart={readChart(currentContent, tableStart)}
                   onEdit={editTable}
                 />
               )}

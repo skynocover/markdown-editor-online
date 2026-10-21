@@ -1,5 +1,8 @@
-## ADDED Requirements
+# table-charts Specification
 
+## Purpose
+在 Markdown 表格正上方放 `<!-- chart bar B2:C4 -->` 註解，預覽時把表格資料畫成長條圖、折線圖或圓餅圖；註解在其他 Markdown 工具裡看不見，那邊只看到表格。編輯表格時可以從表格工具插入、切換、選範圍、移除圖表。
+## Requirements
 ### Requirement: 表格上方的圖表註解
 表格正上方（中間沒有空行）的 HTML 註解，內容符合 `chart <type> <range>` 時，系統 SHALL 在預覽中把該表格的資料畫成圖，顯示在表格下方。`type` SHALL 是 `bar`、`line` 或 `pie`；`range` SHALL 用跟表格公式相同的 A1 座標（範圍或單一座標），不分大小寫。原始 Markdown SHALL 保持不變。
 
@@ -42,6 +45,10 @@
 - **WHEN** 範圍內的某一列全部是空白或文字
 - **THEN** 圖略過那一列
 
+#### Scenario: 整欄都不是數字
+- **WHEN** 範圍內的某一欄全部是空白或文字（例如數字欄中間夾一欄備註）
+- **THEN** 那一欄不畫成系列
+
 ### Requirement: 圖表錯誤顯示
 圖表無法畫出時，系統 SHALL 在圖的位置顯示一行錯誤訊息，表格 SHALL 照常顯示。
 
@@ -52,6 +59,10 @@
 #### Scenario: 範圍裡有公式錯誤
 - **WHEN** 範圍裡的 C3 計算結果是 `#ERR`
 - **THEN** 顯示「C3 是 #ERR」，不畫圖
+
+#### Scenario: 範圍裡沒有數字
+- **WHEN** 範圍內全部是空白或文字
+- **THEN** 顯示「範圍裡沒有數字」
 
 #### Scenario: 圓餅圖選了多欄
 - **WHEN** 註解是 `<!-- chart pie B2:C3 -->`
@@ -67,6 +78,10 @@
 #### Scenario: 插入長條圖
 - **WHEN** 使用者編輯「品項 | 數量 | 單價 | 小計」表格，最後一列是「合計」且 D4 是 `=SUM(D2:D3)`，按「圖表」→「長條圖」
 - **THEN** 表格正上方插入 `<!-- chart bar B2:D3 -->`，不包含合計那一列，預覽出現長條圖
+
+#### Scenario: 插入圓餅圖
+- **WHEN** 同一個表格，使用者按「圖表」→「圓餅圖」
+- **THEN** 插入 `<!-- chart pie D2:D3 -->`，取最右邊的數字欄
 
 #### Scenario: 換類型
 - **WHEN** 表格已經有長條圖，使用者選「折線圖」
@@ -94,3 +109,4 @@
 #### Scenario: 一次復原
 - **WHEN** 使用者拖曳選好範圍放開滑鼠，再按一次 Ctrl+Z
 - **THEN** 註解的範圍回到拖曳之前的值，圖跟著變回來
+

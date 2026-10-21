@@ -58,9 +58,10 @@ const FUNCTIONS = new Map([
 // 最多 2 位小數（金額到分就夠），只影響顯示，參照時用完整精度；signDisplay：-0.001 顯示 0 不是 -0
 const FORMAT = new Intl.NumberFormat("en-US", { maximumFractionDigits: 2, signDisplay: "negative" });
 
-// rows 是表格每一格的原始 Markdown（含表頭）；回傳同樣形狀，公式格是結果字串，其他格是 null
+// rows 是表格每一格的原始 Markdown（含表頭）；回傳同樣形狀，每格的值：數字、null（空白）、字串（文字）或 { code }（公式錯誤）
+// 公式格是完整精度的計算結果（圖表用），顯示用的格式化是 display
 // budget：讀格子的次數上限，整份文件共用一個（calcTables 傳進來）
-export const evaluateTable = (rows, budget = { left: 1e7 }) => {
+export const tableValues = (rows, budget = { left: 1e7 }) => {
   const height = rows.length;
   const width = rows[0]?.length ?? 0;
   const memo = new Map(); // 每個公式格只算一次，結果是數字或 { code }
@@ -184,37 +185,45 @@ export const evaluateTable = (rows, budget = { left: 1e7 }) => {
 
   return rows.map((row, r) =>
     row.map((_, c) => {
-      if (!raw(r, c).startsWith("=")) return null;
       try {
-        return FORMAT.format(formulaValue(r, c));
+        return cellValue(r, c);
       } catch (e) {
         if (!e?.code) throw e;
-        return e.code;
+        return e;
       }
     }),
   );
 };
+
+const isFormula = (s) => (s ?? "").trim().startsWith("=");
+export const display = (v) => (typeof v === "number" ? FORMAT.format(v) : v.code);
+
+// 回傳同樣形狀，公式格是顯示用的結果字串，其他格是 null
+export const evaluateTable = (rows, budget) =>
+  tableValues(rows, budget).map((row, r) => row.map((v, c) => (isFormula(rows[r][c]) ? display(v) : null)));
 
 // 找出 marked tokens 裡所有表格（包含引用、清單裡的），公式格換成計算結果
 // 計算時丟出例外（例如參照鏈太長、括號太深造成堆疊溢位）時，該表格照原文顯示
 // 讀格子的次數上限：每個公式都掃一次大範圍時，計算量是「公式數 × 範圍大小」，可以大到讓頁面卡住
 // 超過就丟出一般例外（不是 { code }），表格照原文顯示；1000 列、每列 SUM 一整欄約 1M 次，在上限內
 // 整份文件共用：每個表格各自重算的話，放很多個大表格就能繞過
+// 每格的值記在 token.values，給表格下方的圖表用
 export const calcTables = (tokens) => {
   const budget = { left: 1e7 };
   marked.walkTokens(tokens, (token) => {
     if (token.type !== "table") return;
     const cells = [token.header, ...token.rows];
-    let results;
+    const rows = cells.map((row) => row.map((cell) => cell.text));
     try {
-      results = evaluateTable(cells.map((row) => row.map((cell) => cell.text)), budget);
+      token.values = tableValues(rows, budget);
     } catch {
       return;
     }
     cells.forEach((row, r) =>
       row.forEach((cell, c) => {
-        const s = results[r][c];
-        if (s !== null) cell.tokens = [{ type: "text", raw: s, text: s }];
+        if (!isFormula(rows[r][c])) return;
+        const s = display(token.values[r][c]);
+        cell.tokens = [{ type: "text", raw: s, text: s }];
       }),
     );
   });

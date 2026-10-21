@@ -34,29 +34,31 @@
 `table-formula.js` 多匯出 `tableValues(rows, budget)`：回傳每格的值，可能是數字、`null`（空白）、字串（文字）或 `{ code }`（公式錯誤）。`evaluateTable` 改成用它，再格式化公式格。圖表用數值，不用加了千分位的顯示字串，避免精度被截斷，也不用再解析字串。公式預算 `budget` 跟 `calcTables` 共用。
 
 ### 表格轉 mermaid（`src/table-chart.js`）
-- `parseChart(comment)` → `{ type, range }` 或 `null`
-- `defaultRange(values)`：所有數字欄 × 所有資料列；如果最後一列有 `SUM`、`AVG`、`MIN`、`MAX`、`COUNT` 的公式，就不包含它。「數字欄」是資料列裡至少有一個數字、而且第一欄除外的欄
+- `parseChart(comment)` → `{ type, range }` 或 `null`；不跨行（表格工具只認表格上一行的註解）
+- `readChart(markdown, tableStart)`：表格上一行是圖表註解就回傳 `{ type, range, start }`，給表格工具讀寫
+- `markCharts(tokens)`：頂層「`html` token 是圖表註解、下一個就是 `table`」時把 spec 掛到 `token.chart`
+- `defaultRange(grid, type)`：所有數字欄 × 所有資料列；如果最後一列有 `SUM`、`AVG`、`MIN`、`MAX`、`COUNT` 的公式，就不包含它。「數字欄」是資料列裡至少有一個數字、而且第一欄除外的欄；圓餅圖只能一欄，取最右邊的數字欄（通常是小計）
 - `chartSource(values, spec)` → mermaid 原文，或丟出帶中文訊息的錯誤（`values` 第 1 列就是表頭，不另外傳）：
   - 範圍截到表格邊界；整個在表格外 → 「範圍超出表格」
-  - 標籤：同一列第一欄的文字；系列名稱：表頭。都把 `"` 換成 `'`，換行換成空白
-  - 範圍裡的文字、空白：bar / line 補 0 的話會誤導，所以**略過整個標籤**的條件是「那一列在範圍內都不是數字」，其他情況空白當 0（跟四則運算一樣）
+  - 標籤：同一列第一欄的文字；系列名稱：表頭。都把 `"` 換成 `'`，換行換成空白；空字串 `""` 在 Pele 是語法錯誤，換成一個空白
+  - 範圍裡的文字、空白：bar / line 補 0 的話會誤導，所以**略過整個標籤**的條件是「那一列在範圍內都不是數字」，整欄都不是數字的欄也不當系列（數字欄中間夾一欄備註時，預設範圍會包到它）；其他情況空白、文字當 0；整個範圍都沒有數字 → 「範圍裡沒有數字」
   - 範圍裡有公式錯誤 → 「C3 是 #ERR」，不畫圖
-  - 數值格式化成不用科學記號的十進位字串
+  - 數值用 `String(n)`（完整精度）；只有出現科學記號時才改用 `toLocaleString` 展開，避免一般的數印出二進位尾數
   - `bar` / `line` → `xychart-beta`，每欄一個有名字的系列；`pie` → 只能一欄，多欄 → 「圓餅圖只能選一欄」
 - 產生的原文交給 `renderDiagram`，錯誤、載入中、安全限制都沿用 `mermaid-diagrams`
 
 ### 接進預覽
-`markTables` 之後，認出圖表註解並把 `{ spec, start }` 掛到下一個表格 token 上（`start` 是註解在原文的位置，給編輯用）。`calcTables` 時順便算圖表需要的數值。`previewRenderer.table` 在表格後面接上圖。圖外面的容器帶 `data-chart-start`，給選範圍時找到對應的表格。
+`markCharts` 把圖表 spec 掛到表格 token 上；`calcTables` 改用 `tableValues`，把每格的值記在 `token.values`。`previewRenderer.table` 在表格後面接上 `renderDiagram(chartSource(...))`，錯誤時是一行 `.diagram-error`。編輯用的註解位置不放在 token 上：表格工具用 `readChart` 從原文直接讀。
 
 ### 「圖表 ▾」選單
-放在 `TableTools` 下方「新增一列」那一條的右邊，從它切一段出來。
+放在 `TableTools` 下方「新增一列」那一條的右邊，從它切一段出來。用原生 `<select>`：開關、點外面收起、鍵盤操作都交給瀏覽器，不用自己管選單狀態。
 - 沒有圖：長條圖、折線圖、圓餅圖 → 在表格正上方插入註解，範圍用 `defaultRange`
 - 有圖：換成另一種類型、選範圍、移除圖表
-- 寫回原文：表格的寫回範圍從 `[表格 start, end)` 擴大成 `[註解 start, end)`，註解和表格一起改，一次 undo 就能還原
+- 寫回原文：`editTable` 讀表格時用 `readChart` 把註解放進 `table.chart`，操作改 `t.chart`；寫回範圍從 `[表格 start, end)` 擴大成 `[註解 start, end)`，一次 undo 就能還原。註解長度變了（插入、移除、範圍變長），表格的位置跟著移，`activeTable` 一起更新
 
 ### 選範圍
-沿用公式拖曳的 `picking` 機制（`cellPos`、`rangeRef`），但寫入的目標換成註解的範圍：
-- 進入選範圍狀態時，用藍框標出目前範圍（CSS），上方顯示「拖曳選擇要畫的格子」
+在 `TableTools` 裡處理，不碰公式拖曳的 `picking`：表格上蓋一層透明的 div 接滑鼠，用量好的欄列位置換算成格子，`setPointerCapture` 讓拖到表格外也收得到放開；選範圍的狀態都在 `TableTools` 裡
+- 進入選範圍狀態時，用藍框標出目前範圍，上方顯示操作提示
 - 拖曳時藍框跟著動；**放開滑鼠就用一次 `replaceText` 寫回註解**，寫回原文本身就會重新 render，圖跟著更新
 - 點欄號選那一欄的資料列（第 2 列到最後一列），Shift 加選到另一欄，一樣點了就寫回
 - 取消就按 Ctrl+Z，每次寫回都是一步 undo；Esc 或點表格外面只是離開選範圍狀態

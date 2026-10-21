@@ -17,6 +17,8 @@ import {
   rangeRef,
   canPickRef,
 } from "./preview-edit.js";
+import { calcTables } from "./table-formula.js";
+import { markCharts } from "./table-chart.js";
 
 const md = "# 標題\n\n| a\\|b | :c: | d |\n|:--|:-:|--:|\n| \\=x | `y` | 1 |\n\n> | q |\n> | --- |\n> | 1 |\n\n結尾";
 
@@ -123,4 +125,50 @@ test("刪除、移動欄列時公式的座標跟著改", () => {
   const t = readTable("| a |\n|---|\n| 1 |\n| =SUM(A2:A2) |\n| =SUM(A2:A99) |", 0);
   deleteRow(t, 1);
   assert.deepEqual(t.grid.map((r) => r[0]), ["a", "=SUM(#REF)", "=SUM(A2:A98)"]);
+});
+
+test("圖表註解的範圍跟著刪除、移動欄列改", () => {
+  const md = "| 品項 | 線上 | 門市 | 小計 |\n|---|---|---|---|\n| 咖啡 | 1 | 2 | 3 |\n| 茶 | 4 | 5 | 9 |";
+  const range = (chart, op) => {
+    const t = readTable(md, 0);
+    t.chart = { type: "bar", range: chart };
+    op(t);
+    return t.chart.range;
+  };
+  assert.equal(range("C2:D3", (t) => deleteCol(t, 0)), "B2:C3");
+  assert.equal(range("D2:D3", (t) => moveCol(t, 3, 1)), "B2:B3");
+  assert.equal(range("B2:C3", (t) => deleteCol(t, 1)), "B2:B3"); // 端點被刪掉往內縮
+  assert.equal(range("B2:B3", (t) => deleteCol(t, 1)), "#REF");
+  assert.equal(range("B2:B3", (t) => deleteRow(t, 1)), "B2");
+  assert.equal(range("#REF", (t) => deleteCol(t, 0)), "#REF");
+  // 在範圍裡搬動：範圍不變；搬出去就移出；從外面搬進來就包進來
+  assert.equal(range("B2:B3", (t) => moveRow(t, 2, 1)), "B2:B3");
+  assert.equal(range("B2:C3", (t) => moveCol(t, 2, 1)), "B2:C3");
+  assert.equal(range("B2:C3", (t) => moveCol(t, 1, 3)), "B2:B3");
+  assert.equal(range("B2:C3", (t) => moveCol(t, 3, 2)), "B2:D3");
+  assert.equal(range("B2:B2", (t) => moveRow(t, 1, 2)), "B3");
+});
+
+test("在 SUM 的範圍裡搬列，範圍不縮", () => {
+  const t = readTable("| a |\n|---|\n| 1 |\n| 2 |\n| 3 |\n| =SUM(A2:A4) |", 0);
+  moveRow(t, 3, 1);
+  assert.equal(t.grid[4][0], "=SUM(A2:A4)");
+  moveRow(t, 1, 4); // 搬到合計下面：移出範圍
+  assert.equal(t.grid[3][0], "=SUM(A2:A3)");
+});
+
+test("表格上方的圖表註解：表格下方接上圖，中間有空行就不畫", () => {
+  const html = (md) => {
+    const opts = { ...marked.defaults, renderer: previewRenderer };
+    const tokens = marked.lexer(md, opts);
+    markTables(tokens);
+    markCharts(tokens);
+    calcTables(tokens);
+    return marked.parser(tokens, opts);
+  };
+  const table = "| a | b |\n|---|---|\n| x | =1+1 |\n| y | 3 |";
+  // 測試裡沒有載入 Pele，圖表顯示成 mermaid 原文
+  assert.match(html(`<!-- chart bar B2:B3 -->\n${table}`), /<\/table>\n<pre><code class="language-mermaid">xychart-beta\n {2}x-axis \[&quot;x&quot;, &quot;y&quot;\]\n {2}bar &quot;b&quot; \[2, 3\]/);
+  assert.doesNotMatch(html(`<!-- chart bar B2:B3 -->\n\n${table}`), /mermaid|diagram-error/);
+  assert.match(html(`<!-- chart pie A2:B3 -->\n${table}`), /<\/table>\n<p class="diagram-error">圓餅圖只能選一欄<\/p>$/);
 });
