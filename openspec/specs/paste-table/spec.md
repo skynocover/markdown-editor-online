@@ -1,7 +1,7 @@
 # paste-table Specification
 
 ## Purpose
-TBD - created by archiving change spreadsheet-tables. Update Purpose after archive.
+從試算表貼上時轉成 Markdown 表格。
 ## Requirements
 ### Requirement: 貼上試算表資料時轉成 Markdown 表格
 在編輯區貼上時，剪貼簿的 `text/html` 含有 `<table>`（不分大小寫），且 `text/plain` 以 TSV 解析後至少有 2 列、每列欄數相同且至少 2 欄時，系統 SHALL 以 GFM 表格取代原文插入：第一列為表頭，接著一行分隔列 `| --- |`，其餘為資料列。

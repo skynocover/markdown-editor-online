@@ -25,6 +25,7 @@ import {
   MoreHorizontal,
   Play,
   Presentation,
+  Table,
 } from "lucide-react";
 import { marked } from "marked";
 import DOMPurify from "dompurify";
@@ -38,6 +39,18 @@ import {
 import { toZip, fromZip } from "./backup";
 import { isAutoNamed, nameFromContent } from "./file-name";
 import { tsvToTable, padTable } from "./paste-table";
+import { calcTables } from "./table-formula";
+import { toggleWrap } from "./text-format";
+import {
+  markTables,
+  markTasks,
+  previewRenderer,
+  readTable,
+  writeTable,
+  rangeRef,
+  canPickRef,
+} from "./preview-edit";
+import { TableTools } from "./table-tools";
 import { isSlides, loadMarp, stripImports, SLIDES_TEMPLATE } from "./slides";
 
 const REPO_URL = "https://github.com/skynocover/markdown-editor-online";
@@ -60,11 +73,25 @@ DOMPurify.addHook("afterSanitizeAttributes", (node) => {
 });
 
 // breaks：單換行轉 <br />，維持原本的換行行為
-const parseMarkdown = (markdown) =>
+// 要合併 marked.defaults：lexer 拿到的選項會整個取代預設值，少了 gfm 表格就不見了
+const MARKED_OPTIONS = { ...marked.defaults, breaks: true, renderer: previewRenderer };
+
+const IS_MAC = /Mac|iPhone|iPad/.test(navigator.platform);
+
+// 選字中的按鍵不算：Safari 選字確認的 Enter 送到 keydown 時 isComposing 已經是 false，只能看 keyCode 229
+const isComposing = (e) => e.nativeEvent.isComposing || e.keyCode === 229;
+
+// lexer 和 parser 中間先算表格公式，並記下表格在原文的位置（預覽點表格編輯用）
+const parseMarkdown = (markdown) => {
+  const tokens = marked.lexer(markdown, MARKED_OPTIONS);
+  markTables(tokens);
+  markTasks(tokens);
+  calcTables(tokens);
   // 禁 <style>：插進來的 CSS 會套到整個編輯器，不只預覽區
-  DOMPurify.sanitize(marked.parse(markdown, { breaks: true }), {
+  return DOMPurify.sanitize(marked.parser(tokens, MARKED_OPTIONS), {
     FORBID_TAGS: ["style"],
   });
+};
 
 // 簡報：Marp 把投影片裡的 <style> 抽成 css，並限定在 div.marpit 底下，HTML 一樣過 DOMPurify
 // foreignObject：Marp 用 SVG 縮放投影片、排左右分割的背景圖
@@ -173,6 +200,12 @@ const MarkdownEditor = () => {
   const [marp, setMarp] = useState(null); // 簡報引擎，第一次遇到簡報才載入
   const [presenting, setPresenting] = useState(null); // 正在播放的簡報 { html, css }
   const importInput = useRef(null);
+  const editorRef = useRef(null);
+  const editingCell = useRef(null); // 預覽裡正在編輯的儲存格
+  const picking = useRef(null); // 公式裡拖曳選範圍的起點 [列, 欄]
+  const [nextCell, setNextCell] = useState(null); // 存檔後要接著編輯的格子：{ start, r, c }
+  const [activeTable, setActiveTable] = useState(null); // 顯示欄號、列號工具的表格（原文位置）
+  const [previewScroll, setPreviewScroll] = useState(null); // 預覽的捲動區塊，工具疊在裡面
 
   // 自動同步到 localStorage
   const quotaAlerted = useRef(false); // 空間不足只提醒一次，不要每打一個字就跳
@@ -390,8 +423,26 @@ const MarkdownEditor = () => {
     if (e.dataTransfer.files.length) {
       importFiles(e.dataTransfer.files, folderId);
     } else {
+      // 放到該資料夾的最後面
       const id = Number(e.dataTransfer.getData(FILE_ID_TYPE));
-      setFiles(files.map((f) => (f.id === id ? { ...f, folderId } : f)));
+      const moved = files.find((f) => f.id === id);
+      if (moved) setFiles([...files.filter((f) => f.id !== id), { ...moved, folderId }]);
+    }
+    endDrag();
+  };
+
+  // 拖到某個檔案上：移到它前面，也搬進它所在的資料夾；側邊欄的順序就是 files 陣列的順序
+  // 從電腦拖進來的檔案不處理，交給外層的資料夾匯入
+  const dropOnFile = (e, target) => {
+    if (!e.dataTransfer.types.includes(FILE_ID_TYPE)) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const id = Number(e.dataTransfer.getData(FILE_ID_TYPE));
+    const moved = files.find((f) => f.id === id);
+    if (moved && id !== target.id) {
+      const rest = files.filter((f) => f.id !== id);
+      rest.splice(rest.indexOf(target), 0, { ...moved, folderId: target.folderId ?? null });
+      setFiles(rest);
     }
     endDrag();
   };
@@ -448,6 +499,205 @@ const MarkdownEditor = () => {
     const { value, selectionStart, selectionEnd } = e.target;
     const text = padTable(table, value.slice(0, selectionStart), value.slice(selectionEnd));
     if (document.execCommand("insertText", false, text)) e.preventDefault();
+  };
+
+  // 插入空白表格，接著在預覽打開第一格（表頭給字：整列空白的格子很小，不好點）
+  const insertTable = () => {
+    const { selectionStart: start, selectionEnd: end, value } = editorRef.current;
+    const table = writeTable([["欄位 1", "欄位 2", "欄位 3"], ["", "", ""], ["", "", ""]]);
+    const text = padTable(table, value.slice(0, start), value.slice(end));
+    replaceText(start, end, text);
+    setNextCell({ start: start + text.indexOf("|"), r: 0, c: 0 });
+  };
+
+  // Ctrl/Cmd+B 粗體、Ctrl/Cmd+I 斜體：再按一次拿掉；一樣用 execCommand，Ctrl+Z 可以還原
+  // Mac 只認 Cmd：Ctrl+B 是系統的游標左移
+  const formatShortcut = (e) => {
+    const mod = IS_MAC ? e.metaKey && !e.ctrlKey : e.ctrlKey && !e.metaKey;
+    const plain = mod && !e.altKey && !e.shiftKey;
+    const mark = plain && { b: "**", i: "*" }[e.key.toLowerCase()];
+    if (!mark || isComposing(e)) return;
+    e.preventDefault();
+    const t = e.target;
+    const { start, end, text, select } = toggleWrap(t.value, t.selectionStart, t.selectionEnd, mark);
+    replaceText(start, end, text);
+    t.setSelectionRange(...select);
+  };
+
+  // 預覽點 checkbox：切換原文裡 [ ] 和 [x]；不讓瀏覽器先改勾選狀態，等原文改了預覽重畫
+  // 位置對不上 [ ] 就不改：重複的連結定義會讓 markTasks 算偏（marked 丟掉它的 raw），HTML 也能自己寫 data-pos
+  const toggleTask = (e) => {
+    const pos = e.target.dataset?.pos;
+    if (pos === undefined) return;
+    e.preventDefault();
+    const p = Number(pos);
+    if (!/^\[[ xX]\]$/.test(currentContent.slice(p - 1, p + 2))) return;
+    replaceText(p, p + 1, currentContent[p] === " " ? "x" : " ");
+  };
+
+  // 在預覽直接編輯表格：點一格就變成可以打字，顯示原始 Markdown（公式格顯示公式）
+  const startCellEdit = (el) => {
+    const start = Number(el.closest("table").dataset.start);
+    const table = readTable(currentContent, start);
+    const r = el.parentElement.rowIndex;
+    const c = el.cellIndex;
+    if (!table || table.grid[r]?.[c] === undefined) return;
+    editingCell.current = { el, start, r, c, table, html: el.innerHTML };
+    setActiveTable(start);
+    el.textContent = table.grid[r][c];
+    el.contentEditable = "plaintext-only";
+    el.focus();
+    getSelection().selectAllChildren(el);
+  };
+
+  // 預覽重新渲染後 DOM 是新的，要重新找格子
+  const openCell = ({ start, r, c }) => {
+    const table = document.querySelector(`.preview-editable table[data-start="${start}"]`);
+    const el = table?.rows[r]?.cells[c];
+    if (el) startCellEdit(el);
+  };
+
+  // 收起編輯中的格子，回傳打的字；先清掉 editingCell：之後 focus 到編輯區會再觸發一次 blur
+  // HTML 先還原，有寫回的話預覽會用新內容重畫
+  const closeCell = (edit) => {
+    editingCell.current = null;
+    edit.el.removeAttribute("contenteditable");
+    const text = edit.el.textContent.replace(/\s*\n\s*/g, " ").trim();
+    edit.el.innerHTML = edit.html;
+    return text;
+  };
+
+  // 結束編輯：有改就寫回整個表格；move 是接著要編輯的方向 [列, 欄]
+  // 回傳原文長度的變化（後面的表格位置要跟著移），沒寫回是 null
+  const finishCellEdit = (save, move) => {
+    const edit = editingCell.current;
+    if (!edit) return null;
+    const { start, r, c, table } = edit;
+    const text = closeCell(edit);
+    const next = move && { start, r: r + move[0], c: c + move[1] };
+    if (!save || text === table.grid[r][c].trim()) {
+      if (next) openCell(next);
+      return null;
+    }
+    table.grid[r][c] = text;
+    const markdown = writeTable(table.grid, table.align);
+    replaceText(start, table.end, markdown);
+    if (next) setNextCell(next); // 等預覽用新內容渲染完再打開
+    return markdown.length - (table.end - start);
+  };
+
+  useEffect(() => {
+    if (!nextCell) return;
+    openCell(nextCell);
+    setNextCell(null);
+  }, [nextCell]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // 編輯中格子的游標位置（文字裡的位移）
+  const caretRange = (el) => {
+    const sel = getSelection();
+    if (!sel.rangeCount || !el.contains(sel.anchorNode)) {
+      const n = el.textContent.length;
+      return { start: n, end: n };
+    }
+    const range = sel.getRangeAt(0);
+    const before = document.createRange();
+    before.selectNodeContents(el);
+    before.setEnd(range.startContainer, range.startOffset);
+    const start = before.toString().length;
+    return { start, end: start + range.toString().length };
+  };
+
+  // 把座標放進公式的 [start, end)，記下位置：緊接著再點別格會換掉它，不會一直累加
+  const insertRef = (edit, ref, { start, end }) => {
+    const text = edit.el.textContent;
+    edit.el.textContent = text.slice(0, start) + ref + text.slice(end);
+    edit.ref = { start, end: start + ref.length };
+    getSelection().collapse(edit.el.firstChild, edit.ref.end);
+  };
+
+  const cellPos = (cell) => [cell.parentElement.rowIndex, cell.cellIndex];
+  const cellIn = (edit, target) => target.closest(`table[data-start="${edit.start}"] :is(th, td)`);
+
+  // 換格、插入座標都在 mousedown 處理：等到 click 時上一格已經存檔、預覽重畫，瀏覽器不會送出 click
+  const onPreviewMouseDown = (e) => {
+    if (e.button !== 0 || e.target.closest("a")) return;
+    const edit = editingCell.current;
+    const cell = e.target.closest(".preview-editable table[data-start] :is(th, td)");
+    if (!cell) {
+      setActiveTable(null); // 正在編輯的格子由 blur 存檔
+      return;
+    }
+    if (cell === edit?.el) return; // 在編輯中的格子裡點：照常移動游標
+
+    // 公式裡點同一個表格的別格：插入座標而不是換格（跟試算表一樣），按住拖曳變成範圍
+    if (edit && cellIn(edit, e.target)) {
+      const caret = caretRange(edit.el);
+      const replacing = edit.ref?.end === caret.start && caret.start === caret.end;
+      if (replacing || canPickRef(edit.el.textContent, caret.start)) {
+        e.preventDefault(); // 編輯中的格子不失去焦點
+        picking.current = cellPos(cell);
+        insertRef(edit, rangeRef(picking.current, picking.current), replacing ? edit.ref : caret);
+        return;
+      }
+    }
+
+    // 換到別格：先存上一格，有寫回就等預覽重畫再打開（後面的表格位置要加上長度變化）
+    e.preventDefault();
+    const start = Number(cell.closest("table").dataset.start);
+    const [r, c] = cellPos(cell);
+    const delta = finishCellEdit(true);
+    if (delta === null) startCellEdit(cell);
+    else setNextCell({ start: start > edit.start ? start + delta : start, r, c });
+  };
+
+  const onPreviewMouseOver = (e) => {
+    const edit = editingCell.current;
+    const cell = picking.current && edit && cellIn(edit, e.target);
+    if (cell) insertRef(edit, rangeRef(picking.current, cellPos(cell)), edit.ref);
+  };
+
+  useEffect(() => {
+    const stop = () => (picking.current = null);
+    window.addEventListener("mouseup", stop);
+    return () => window.removeEventListener("mouseup", stop);
+  }, []);
+
+  // 新增、刪除、移動欄列：正在編輯的格子先一起算進去，整個表格只寫回一次
+  const editTable = (op) => {
+    const edit = editingCell.current;
+    let table;
+    if (edit?.start === activeTable) {
+      table = edit.table;
+      table.grid[edit.r][edit.c] = closeCell(edit);
+    } else {
+      table = readTable(currentContent, activeTable);
+    }
+    if (!table) return;
+    op(table);
+    replaceText(activeTable, table.end, writeTable(table.grid, table.align));
+  };
+
+  // 換檔案時收起表格工具：同一個位置在別的檔案可能是別的表格
+  useEffect(() => setActiveTable(null), [currentFileId]);
+
+  // Enter 往下、Tab 往右（Shift+Tab 往左），Esc 取消；選字中的 Enter 不算
+  const onPreviewKeyDown = (e) => {
+    if (!editingCell.current || isComposing(e)) return;
+    if (e.key === "Escape") finishCellEdit(false);
+    else if (e.key === "Enter") finishCellEdit(true, [1, 0]);
+    else if (e.key === "Tab") finishCellEdit(true, [0, e.shiftKey ? -1 : 1]);
+    else return;
+    e.preventDefault();
+  };
+
+  // 跟貼上表格一樣用 execCommand 寫回，Ctrl+Z 可以還原
+  const replaceText = (start, end, text) => {
+    const textarea = editorRef.current;
+    textarea.focus();
+    textarea.setSelectionRange(start, end);
+    if (!document.execCommand("insertText", false, text)) {
+      updateFileContent(currentContent.slice(0, start) + text + currentContent.slice(end));
+    }
   };
 
   const exportFile = () => {
@@ -561,8 +811,17 @@ const MarkdownEditor = () => {
         key={file.id}
         className={`group flex items-center gap-1.5 px-2 py-1.5 rounded cursor-pointer ${
           active ? "bg-blue-600 text-white" : "text-gray-300 hover:bg-gray-700"
-        } ${draggingId === file.id ? "opacity-40" : ""}`}
+        } ${draggingId === file.id ? "opacity-40" : ""} ${
+          dragOver === `file-${file.id}` ? "shadow-[inset_0_2px_0_#3b82f6]" : ""
+        }`}
         onClick={() => setCurrentFileId(file.id)}
+        onDragOver={(e) => {
+          if (!e.dataTransfer.types.includes(FILE_ID_TYPE)) return;
+          e.preventDefault();
+          e.stopPropagation();
+          setDragOver(`file-${file.id}`);
+        }}
+        onDrop={(e) => dropOnFile(e, file)}
       >
         {/* 只有把手可拖曳：整列 draggable 會讓 Firefox 無法用滑鼠選取檔名 */}
         <span
@@ -826,6 +1085,15 @@ const MarkdownEditor = () => {
             {current.slides && marp && (
               <PlayButton onClick={() => startPresenting(current)} />
             )}
+            <button
+              onClick={insertTable}
+              className="group/tip relative flex items-center px-3 py-1.5 text-sm text-gray-700 border border-gray-300 rounded hover:bg-gray-50"
+              aria-label="插入表格"
+            >
+              <Table size={16} className="mr-2" />
+              表格
+              <Tip text="插入表格，在預覽點格子就能編輯" />
+            </button>
             {/* 複製按鈕 */}
             <button
               onClick={copyContent}
@@ -882,9 +1150,11 @@ const MarkdownEditor = () => {
           {/* Markdown 編輯區 */}
           <div className="flex-1 min-w-0 border-r">
             <textarea
+              ref={editorRef}
               value={currentContent}
               onChange={(e) => updateFileContent(e.target.value)}
               onPaste={pasteTable}
+              onKeyDown={formatShortcut}
               className="w-full h-full p-4 bg-gray-50 font-mono text-sm leading-[1.7] resize-none outline-none"
               placeholder="在此輸入 Markdown..."
             />
@@ -892,9 +1162,38 @@ const MarkdownEditor = () => {
 
           {/* 預覽區：外層不捲動，字數才能固定在右下角 */}
           <div className="relative flex-1 min-w-0">
-            <div className="h-full overflow-auto bg-white">
+            <div ref={setPreviewScroll} className="relative h-full overflow-auto bg-white">
               {/* 唯讀預覽開著時不放這份的 CSS：兩份簡報同在 div.marpit 底下，只設在這份的屬性會漏到上面 */}
-              <Preview doc={viewDoc ? { ...current, css: "" } : current} width="max-w-[70ch]" />
+              <Preview
+                doc={viewDoc ? { ...current, css: "" } : current}
+                width="max-w-[70ch]"
+                tableEvents={{
+                  onClick: toggleTask,
+                  onMouseDown: onPreviewMouseDown,
+                  onMouseOver: onPreviewMouseOver,
+                  // 自己打字後，剛插入的座標就不再被下一次點擊換掉，拖曳選範圍也結束
+                  onInput: () => {
+                    picking.current = null;
+                    if (editingCell.current) editingCell.current.ref = null;
+                  },
+                  onKeyDown: onPreviewKeyDown,
+                  // 存檔會把焦點移到編輯區（replaceText），再還給使用者點的東西，例如側邊欄的檔名
+                  // 切到別的 App 不算離開：回來時焦點還在這格，貼上會進格子而不是原文
+                  onBlur: (e) => {
+                    if (!document.hasFocus()) return;
+                    finishCellEdit(true);
+                    e.relatedTarget?.focus();
+                  },
+                }}
+              />
+              {activeTable !== null && previewScroll && (
+                <TableTools
+                  container={previewScroll}
+                  start={activeTable}
+                  html={current.html}
+                  onEdit={editTable}
+                />
+              )}
             </div>
             <CharCount html={current.html} />
           </div>
@@ -1207,6 +1506,24 @@ const MarkdownEditor = () => {
         .prose tbody tr:nth-child(even) {
           background-color: #fafafa;
         }
+        .preview-editable table[data-start] :is(th, td) {
+          cursor: text;
+        }
+        .preview-editable table[data-start] :is(th, td):hover {
+          background-color: #eff6ff;
+        }
+        /* checkbox：自己的文件點了會改原文；唯讀分享預覽不能點 */
+        .preview-editable input[data-pos] {
+          cursor: pointer;
+        }
+        .prose:not(.preview-editable) input[type="checkbox"] {
+          pointer-events: none;
+        }
+        .preview-editable [contenteditable] {
+          outline: 2px solid #3b82f6;
+          outline-offset: -2px;
+          background-color: #eff6ff;
+        }
         .slides svg[data-marpit-svg] {
           display: block;
           width: 100%;
@@ -1255,19 +1572,27 @@ const Tip = ({ text, align = "center" }) => (
 // 預覽：一般文件用 prose 排版，簡報一張張往下疊
 // 唯讀預覽、播放畫面都在 DOM 後面，各自的 <style> 會蓋過底下編輯器預覽的主題
 // contain:paint 讓 inline style 的 position:fixed 只能待在預覽區內，蓋不到整個編輯器
-const Preview = ({ doc, width }) =>
-  doc.slides ? (
+// tableEvents：只有自己的文件可以在預覽編輯表格，唯讀分享預覽不傳
+// innerHTML 物件要記住：每次 render 給新物件，React 會重設 innerHTML，正在編輯的格子就被換掉了
+// 唯讀預覽的 checkbox 沒有 disabled（HTML 跟自己的預覽共用），CSS 擋了滑鼠，這裡擋鍵盤的空白鍵
+const readOnlyEvents = { onClick: (e) => e.target.type === "checkbox" && e.preventDefault() };
+
+const Preview = ({ doc, width, tableEvents }) => {
+  const inner = useMemo(() => ({ __html: doc.html }), [doc.html]);
+  return doc.slides ? (
     <div className="slides p-6 pb-10 [contain:paint]">
       <style>{doc.css}</style>
-      <div dangerouslySetInnerHTML={{ __html: doc.html }} />
+      <div dangerouslySetInnerHTML={inner} />
     </div>
   ) : (
     <div
-      className={`mx-auto ${width} p-6 pb-10 prose [contain:paint] [overflow-wrap:anywhere]`}
-      dangerouslySetInnerHTML={{ __html: doc.html }}
+      {...(tableEvents ?? readOnlyEvents)}
+      className={`mx-auto ${width} p-6 pb-10 prose [contain:paint] [overflow-wrap:anywhere] ${tableEvents ? "preview-editable" : ""}`}
+      dangerouslySetInnerHTML={inner}
       style={{ lineHeight: "1.6" }}
     />
   );
+};
 
 const PlayButton = ({ onClick }) => (
   <button
