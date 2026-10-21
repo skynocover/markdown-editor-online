@@ -15,6 +15,8 @@ import {
   setSpot,
   setSpotDirective,
   toggleClass,
+  isDark,
+  setDark,
   addSlide,
   duplicateSlide,
   deleteSlide,
@@ -415,4 +417,38 @@ test("背景圖：Marp 認得但面板讀不懂的寫法，bgs 有值、readBack
     assert.equal(slides(md)[0].bgs.length, 1, body);
     assert.equal(bgOf(md), null, body);
   }
+});
+
+test("整份深色：front matter 加減 invert，保留其他 class", () => {
+  const on = setDark(marp, `${FM}\n# 1`, true);
+  assert.equal(on, "---\nmarp: true\nclass: invert\n---\n\n# 1");
+  assert.equal(isDark(on), true);
+  assert.equal(setDark(marp, on, false), `${FM}\n# 1`);
+  assert.match(setDark(marp, "---\nmarp: true\nclass: custom\n---\n# 1", true), /^class: custom invert$/m);
+  assert.match(setDark(marp, "---\nmarp: true\nclass: [custom, invert]\n---\n# 1", false), /^class: custom$/m);
+  const quoted = '---\nmarp: true\nclass: ["lead", "invert"]\n---\n# 1';
+  assert.equal(isDark(quoted), true);
+  assert.match(setDark(marp, quoted, false), /^class: lead$/m);
+  // 空的 class: 不能讀到下一行
+  assert.match(setDark(marp, "---\nmarp: true\nclass:\ntheme: gaia\n---\n# 1", true), /^class: invert\ntheme: gaia$/m);
+  // 下面幾行的 YAML 陣列：讀得到原本的值，寫入時整段換掉
+  const block = "---\nmarp: true\nclass:\n  - lead\n  - invert\ntheme: gaia\n---\n# 1";
+  assert.equal(isDark(block), true);
+  assert.equal(setDark(marp, block, false), "---\nmarp: true\nclass: lead\ntheme: gaia\n---\n# 1");
+});
+
+test("整份深色：程式碼區塊裡的 _class 不動", () => {
+  const md = `${FM}\n# 1\n\n---\n\n\`\`\`html\n<!-- _class: lead -->\n\`\`\``;
+  assert.equal(setDark(marp, setDark(marp, md, true), false), md);
+  assert.match(setDark(marp, md, true), /<!-- _class: lead -->/);
+});
+
+test("整份深色：寫了 _class 的頁一起變，關掉回到原樣", () => {
+  const md = `${FM}\n<!-- _class: lead -->\n# 1\n\n---\n\n# 2\n\n---\n<!-- _class: lead -->\n\n# 3`;
+  const on = setDark(marp, md, true);
+  assert.deepEqual(slides(on).map((s) => s.directives.class), ["lead invert", "invert", "lead invert"]);
+  assert.equal(setDark(marp, on, false), md);
+  // 整份深色時個別關掉的頁（_class: ""），關掉整份時那行一起清掉
+  const light = toggleClass(marp, on, 1, "invert");
+  assert.equal(setDark(marp, light, false), md);
 });

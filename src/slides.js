@@ -203,9 +203,11 @@ export const slideRanges = (marp, markdown) => {
   const starts = opens.map((t, i) => (i === 0 ? frontMatterLines(markdown) : t.map[0]));
   const total = markdown.split("\n").length;
   const bgs = opens.map(() => []);
+  const spots = opens.map(() => new Set()); // 這頁 Marp 讀到的設定註解，程式碼區塊裡的不算
   let slide = -1;
   for (const t of tokens) {
     if (t.type === "marpit_slide_open") slide++;
+    if (t.type === "marpit_comment" && slide >= 0) Object.keys(t.meta?.marpitParsedDirectives ?? {}).forEach((k) => spots[slide].add(k));
     // 整段只有背景圖時 Marp 會把它改成 marpit_hidden_inline
     if ((t.type !== "inline" && t.type !== "marpit_hidden_inline") || !t.map) continue;
     let line = t.map[0]; // 一段文字可能跨好幾行：數前面有幾個換行
@@ -221,6 +223,7 @@ export const slideRanges = (marp, markdown) => {
       separator: i > 0,
       directives: t.meta.marpitDirectives,
       bgs: bgs[i],
+      spots: spots[i],
     })),
     global: { ...marp.lastGlobalDirectives },
   };
@@ -228,10 +231,12 @@ export const slideRanges = (marp, markdown) => {
 
 // front matter 裡某個 key 的值（去掉引號），沒寫就是 undefined
 export const readFrontMatter = (markdown, key) => {
-  const raw = markdown
+  // 不跨行：`header:` 空值不能讀到下一行；下面接著 `- 值` 的是 YAML 陣列，讀成 [a, b]
+  const m = markdown
     .match(FRONT_MATTER)?.[1]
-    .match(new RegExp(`^${key}\\s*:\\s*(.*?)\\s*$`, "m"))?.[1];
-  if (raw === undefined) return undefined;
+    .match(new RegExp(`^${key}[ \\t]*:[ \\t]*(.*?)[ \\t]*$((?:\\n[ \\t]*-.*)*)`, "m"));
+  if (!m) return undefined;
+  const raw = m[1] || (m[2] && `[${m[2].split("\n").slice(1).map((l) => l.replace(/^\s*-\s*/, "").trim()).join(", ")}]`);
   if (raw.startsWith('"')) {
     try {
       return JSON.parse(raw);
@@ -263,7 +268,13 @@ export const setGlobal = (markdown, key, value) => {
   if (!fmEnd) return markdown; // 簡報一定有 front matter（marp: true）
   const re = new RegExp(`^${key}\\s*:`);
   const i = lines.findIndex((line, n) => n > 0 && n < fmEnd - 1 && re.test(line));
-  if (i >= 0) return write(i, `${key}: ${text}`);
+  if (i >= 0) {
+    // 值是下面幾行的 YAML 陣列（`- lead`）時一起換掉，留著的話 front matter 會壞掉
+    let n = i + 1;
+    while (n < fmEnd - 1 && /^[ \t]*-/.test(lines[n])) n++;
+    lines.splice(i + 1, n - i - 1);
+    return write(i, `${key}: ${text}`);
+  }
   if (empty) return markdown;
   lines.splice(fmEnd - 1, 0, `${key}: ${text}`);
   return lines.join("\n");
@@ -313,6 +324,27 @@ export const toggleClass = (marp, markdown, index, name) => {
   const classes = normalize.class(range.directives.class).split(" ").filter(Boolean);
   const next = classes.includes(name) ? classes.filter((c) => c !== name) : [...classes, name];
   return setSpotDirective(marp, markdown, index, "class", next.join(" "));
+};
+
+// 整份深色：front matter 的 class 加減 invert，其他 class 保留
+// 頁裡的 _class 會整個蓋掉 front matter 的 class（封面的 _class: lead 最常見）：這些頁一起加減，每一頁才都跟著變
+// 中途不帶底線的 class 註解不動，跟頁碼一樣是使用者刻意寫的
+// front matter 的 class 是原文，可能是 [a, "b"] 這種 YAML 陣列：去掉括號、逗號、引號
+const classList = (cls) => (Array.isArray(cls) ? cls.join(" ") : (cls ?? "")).split(/[\s,[\]"']+/).filter(Boolean);
+
+export const isDark = (markdown) => classList(readFrontMatter(markdown, "class")).includes("invert");
+
+export const setDark = (marp, markdown, dark) => {
+  const edit = (cls) => {
+    const list = classList(cls).filter((c) => c !== "invert");
+    return (dark ? [...list, "invert"] : list).join(" ");
+  };
+  const next = setGlobal(markdown, "class", edit(readFrontMatter(markdown, "class")));
+  // 只改 Marp 真的讀到 _class 的頁：程式碼區塊裡同樣的一行不算；別頁的修改不影響這頁的 _class，解析一次就夠
+  return (slideRanges(marp, next)?.slides ?? []).reduce(
+    (md, range, i) => (range.spots.has("_class") ? setSpotDirective(marp, md, i, "class", edit(range.directives.class)) : md),
+    next,
+  );
 };
 
 // 插入一段投影片：前一行有字的話先空一行，不然 --- 會變成上一段的標題底線

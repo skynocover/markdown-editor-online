@@ -7,6 +7,8 @@ import { Plus, Copy, Trash2, Settings2, Image as ImageIcon, ChevronDown, TextAli
 import {
   slideRanges,
   readFrontMatter,
+  isDark,
+  setDark,
   setGlobal,
   setSpot,
   setSpotDirective,
@@ -22,10 +24,11 @@ import {
 
 // 主題用小卡片顯示，不用點就看得出風格；底色、字色、字型取自各主題的預設樣式
 // desc 顯示在卡片下方，滑鼠移到哪張就說明哪張，不然說明目前的主題
+// dark：深色開關打開時卡片的配色，取自 Marp 主題 CSS 的深色值
 const THEMES = [
-  { name: "default", style: { background: "#fff", color: "#24292f" }, align: "text-left", desc: "白底黑字、文字靠左，適合報告和技術文件" },
-  { name: "gaia", style: { background: "#fff8e1", color: "#455a64", fontFamily: "Lato, sans-serif" }, align: "text-left", desc: "米黃底、色調溫暖，唯一有置中封面版型" },
-  { name: "uncover", style: { background: "#fdfcff", color: "#202228", letterSpacing: "0.05em" }, align: "text-center", desc: "極簡、內容置中，適合一頁一句重點的演講" },
+  { name: "default", style: { background: "#fff", color: "#24292f" }, dark: { background: "#0d1117", color: "#e6edf3" }, align: "text-left", desc: "白底黑字、文字靠左，適合報告和技術文件" },
+  { name: "gaia", style: { background: "#fff8e1", color: "#455a64", fontFamily: "Lato, sans-serif" }, dark: { background: "#455a64", color: "#fff8e1" }, align: "text-left", desc: "米黃底、色調溫暖，唯一有置中封面版型" },
+  { name: "uncover", style: { background: "#fdfcff", color: "#202228", letterSpacing: "0.05em" }, dark: { background: "#202228", color: "#fff" }, align: "text-center", desc: "極簡、內容置中，適合一頁一句重點的演講" },
 ];
 const SIZES = ["16:9", "4:3"];
 
@@ -54,7 +57,7 @@ const Row = ({ label, children }) => (
   </div>
 );
 
-// 「簡報設定」按鈕和面板：theme、size 用整份實際套用的值；paginate、header、footer 會往後延續，讀 front matter 的預設值
+// 「簡報設定」按鈕和面板：theme、size 用整份實際套用的值；paginate、header、footer、深色會往後延續，讀 front matter 的預設值
 // global：render 時 Marp 留下的整份設定，不用為了設定面板再解析一次
 // 原生 popover：點外面、按 Esc 自動關閉；打開時量按鈕的位置，面板對齊按鈕右下
 // popovertarget 用 id 找面板，面板在 portal 裡照樣找得到
@@ -66,6 +69,7 @@ export const SlideSettings = ({ marp, markdown, global, onChange, className }) =
   const header = readFrontMatter(markdown, "header") ?? "";
   const footer = readFrontMatter(markdown, "footer") ?? "";
   const paginate = readFrontMatter(markdown, "paginate")?.toLowerCase() === "true"; // Marp 不分大小寫
+  const dark = isDark(markdown);
   const set = (key, value) => {
     const next = setGlobal(markdown, key, value);
     if ((key === "theme" || key === "size") && slideRanges(marp, next)?.global[key] !== value) return;
@@ -82,7 +86,7 @@ export const SlideSettings = ({ marp, markdown, global, onChange, className }) =
       <button popoverTarget="slide-settings" className={className}>
         <Settings2 size={16} className="lg:mr-2" />
         <span className="hidden lg:inline">簡報設定</span>
-        <Tip text="簡報設定：主題、比例、頁碼、頁首和頁尾" />
+        <Tip text="簡報設定：主題、比例、頁碼、深色、頁首和頁尾" />
       </button>
       {/* 面板放到 body：留在按鈕組裡會被當成組的最後一個，打亂分隔線和圓角 */}
       {createPortal(
@@ -104,7 +108,7 @@ export const SlideSettings = ({ marp, markdown, global, onChange, className }) =
                   aria-pressed={t.name === theme}
                   className={`overflow-hidden rounded-md border text-xs ${t.name === theme ? "border-blue-500 ring-2 ring-blue-200" : "border-gray-200 hover:border-gray-400"}`}
                 >
-                  <div style={t.style} className={`aspect-video px-2 pt-2 ${t.align}`}>
+                  <div style={dark ? { ...t.style, ...t.dark } : t.style} className={`aspect-video px-2 pt-2 ${t.align}`}>
                     <div className="text-base font-bold leading-none">Aa</div>
                     <div className="mt-1 h-1 w-3/4 rounded-full bg-current opacity-25" />
                   </div>
@@ -114,43 +118,55 @@ export const SlideSettings = ({ marp, markdown, global, onChange, className }) =
             </div>
             <p className="mt-2 text-xs leading-relaxed text-gray-500">{desc}</p>
           </div>
-          <Row label="比例">
-            <Segmented options={SIZES} value={global.size ?? "16:9"} onChange={(v) => set("size", v)} />
+          <Row label="深色">
+            <Switch label="深色" checked={dark} onChange={() => onChange(setDark(marp, markdown, !dark))} />
           </Row>
-          <Row label="顯示頁碼">
-            <button
-              role="switch"
-              aria-checked={paginate}
-              aria-label="顯示頁碼"
-              onClick={() => set("paginate", !paginate)}
-              className={`relative h-5 w-9 rounded-full transition-colors ${paginate ? "bg-blue-600" : "bg-gray-300"}`}
-            >
-              <span
-                className={`absolute top-0.5 left-0.5 h-4 w-4 rounded-full bg-white shadow transition-transform ${paginate ? "translate-x-4" : ""}`}
-              />
-            </button>
-          </Row>
-          {/* 原文改了就換一個輸入框，顯示新的值 */}
-          <TextSetting
-            key={`h${header}`}
-            label="頁首"
-            placeholder="每頁上方的文字"
-            value={header}
-            onCommit={(v) => v !== header && set("header", v)}
-          />
-          <TextSetting
-            key={`f${footer}`}
-            label="頁尾"
-            placeholder="每頁底部的文字"
-            value={footer}
-            onCommit={(v) => v !== footer && set("footer", v)}
-          />
+          {/* 分組：外觀（主題、深色）｜比例｜每頁上的資訊（頁碼、頁首、頁尾） */}
+          <div className="border-t border-gray-100 pt-4">
+            <Row label="比例">
+              <Segmented options={SIZES} value={global.size ?? "16:9"} onChange={(v) => set("size", v)} />
+            </Row>
+          </div>
+          <div className="space-y-4 border-t border-gray-100 pt-4">
+            <Row label="顯示頁碼">
+              <Switch label="顯示頁碼" checked={paginate} onChange={() => set("paginate", !paginate)} />
+            </Row>
+            {/* 原文改了就換一個輸入框，顯示新的值 */}
+            <TextSetting
+              key={`h${header}`}
+              label="頁首"
+              placeholder="每頁上方的文字"
+              value={header}
+              onCommit={(v) => v !== header && set("header", v)}
+            />
+            <TextSetting
+              key={`f${footer}`}
+              label="頁尾"
+              placeholder="每頁底部的文字"
+              value={footer}
+              onCommit={(v) => v !== footer && set("footer", v)}
+            />
+          </div>
         </div>,
         document.body,
       )}
     </>
   );
 };
+
+const Switch = ({ label, checked, onChange }) => (
+  <button
+    role="switch"
+    aria-checked={checked}
+    aria-label={label}
+    onClick={onChange}
+    className={`relative h-5 w-9 rounded-full transition-colors ${checked ? "bg-blue-600" : "bg-gray-300"}`}
+  >
+    <span
+      className={`absolute top-0.5 left-0.5 h-4 w-4 rounded-full bg-white shadow transition-transform ${checked ? "translate-x-4" : ""}`}
+    />
+  </button>
+);
 
 // 頁首、頁尾：打字時不寫回原文，Enter 或離開輸入框才寫，Ctrl+Z 才不會一個字一個字還原
 // 點外面、按 Esc 關掉面板都會離開輸入框，一定會寫入，不用提示「按 Enter 套用」

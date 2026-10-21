@@ -4,7 +4,7 @@
 在預覽上調整簡報，不用先學 Marp 語法：工具列的「簡報設定」面板改整份的主題、比例、頁碼、頁首和頁尾，投影片上的單頁工具列切換置中、深色、隱藏頁碼，以及新增、複製、刪除投影片。每個控制項只改原文的一行，可以用 Ctrl+Z 還原。
 ## Requirements
 ### Requirement: 整份簡報設定
-編輯模式下打開簡報時，系統 SHALL 在頂端工具列顯示「簡報設定」按鈕（一般文件 SHALL 不顯示），面板裡有主題（default、gaia、uncover，卡片下方用一句話說明滑鼠所在或目前的主題風格）、比例（16:9、4:3）、頁碼開關、頁首和頁尾文字，修改時 SHALL 只改原文裡對應的那一行。主題、比例 SHALL 以目前實際套用的值作為初始狀態；設定寫在註解裡時改最後一個註解，否則改 front matter 那一行。頁碼、頁首、頁尾會從寫的那一頁往後延續，SHALL 只讀寫 front matter 那一行，不改任何頁裡的註解。front matter 沒有那一行時 SHALL 加在 front matter 的最後面。值清空時 SHALL 刪掉那一行。值含有 YAML 特殊字元時 SHALL 用引號包起來。
+編輯模式下打開簡報時，系統 SHALL 在頂端工具列顯示「簡報設定」按鈕（一般文件 SHALL 不顯示），面板裡有主題（default、gaia、uncover，卡片下方用一句話說明滑鼠所在或目前的主題風格）、深色開關、比例（16:9、4:3）、頁碼開關、頁首和頁尾文字（依序分成外觀、比例、每頁資訊三組），修改時 SHALL 只改原文裡對應的那一行。主題、比例 SHALL 以目前實際套用的值作為初始狀態；設定寫在註解裡時改最後一個註解，否則改 front matter 那一行。頁碼、頁首、頁尾會從寫的那一頁往後延續，SHALL 只讀寫 front matter 那一行，不改任何頁裡的註解。深色 SHALL 以 front matter 的 `class` 是否含 `invert` 作為狀態，切換時在 front matter 的 `class` 加入或移除 `invert`、保留其他值，並且對寫了 `_class` 的頁面一起加入或移除 `invert`（跟延續下來的值相同時刪掉那一行）；中途不帶底線的 `class` 註解 SHALL 不改。front matter 沒有那一行時 SHALL 加在 front matter 的最後面。值清空時 SHALL 刪掉那一行。值含有 YAML 特殊字元時 SHALL 用引號包起來。
 
 #### Scenario: 換主題
 - **WHEN** front matter 有 `theme: gaia`，使用者選 uncover
@@ -37,6 +37,22 @@
 #### Scenario: 新增頁首
 - **WHEN** front matter 沒有 `header`，使用者把頁首設成 `第一章`
 - **THEN** front matter 最後面加上 `header: 第一章`
+
+#### Scenario: 打開深色
+- **WHEN** front matter 沒有 `class`，使用者打開深色
+- **THEN** front matter 最後面加上 `class: invert`，每一頁都變深色
+
+#### Scenario: 保留其他 class
+- **WHEN** front matter 有 `class: custom`，使用者打開深色
+- **THEN** 那一行變成 `class: custom invert`
+
+#### Scenario: 封面也跟著變
+- **WHEN** 第 1 頁有 `<!-- _class: lead -->`，使用者打開深色
+- **THEN** 那一行變成 `<!-- _class: lead invert -->`；再關掉時變回 `<!-- _class: lead -->`，front matter 的 `class` 那一行刪掉
+
+#### Scenario: 主題卡片跟著深色
+- **WHEN** 深色開關是打開的
+- **THEN** 三張主題卡片顯示各主題深色版的背景和文字色
 
 ### Requirement: 單頁版型與頁碼
 滑鼠移到投影片上，或在觸控裝置點一下投影片時，系統 SHALL 在該頁右上角顯示「置中」、「深色」、「隱藏頁碼」開關，並以這頁實際套用的設定作為初始狀態。切換時 SHALL 只寫入只影響當頁的設定（`_class`、`_paginate`），新的值 SHALL 從這頁實際套用的值增減（包括從前面頁延續下來的 `class`）。新的值跟延續下來的值相同時 SHALL 刪掉那一行，否則這頁已經有該設定就改，沒有就插在這頁開頭。`lead`、`invert` 以外的 class SHALL 原樣保留。主題不是 gaia 時（只有 gaia 有置中版型），「置中」SHALL 停用，這頁已經有 `lead` 時 SHALL 仍可關掉。
