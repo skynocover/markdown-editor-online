@@ -3,7 +3,7 @@ import { display, isFormula, tableValues } from "./table-formula.js";
 import { chartSource, parseChart } from "./table-chart.js";
 
 // 簡報模式：檔頭 front matter 有 `marp: true` 時，用 Marp 把 --- 分隔的內容排成投影片
-const FRONT_MATTER = /^---\r?\n([\s\S]*?)\r?\n---(\r?\n|$)/;
+const FRONT_MATTER = /^---\r?\n([\s\S]*?)\r?\n---[ \t]*(\r?\n|$)/;
 
 export const isSlides = (markdown) =>
   /^marp:\s*true\s*$/m.test(markdown.match(FRONT_MATTER)?.[1] ?? "");
@@ -138,6 +138,9 @@ paginate: true
 - 用 \`---\` 分頁
 - 第一行的 \`marp: true\` 開啟簡報模式
 - 按右上角「播放」全螢幕，← → 換頁、Esc 離開
+- 「簡報設定」換主題、比例；滑鼠移到投影片上可以設成置中、深色、加背景圖，或新增、複製、刪除這一頁
+
+<!-- 這是講者備註：一般的 HTML 註解只有預覽和「講者模式」看得到，放映時看不到 -->
 
 ---
 
@@ -165,3 +168,315 @@ paginate: true
 \`<!-- _class: invert -->\` 只套用到這一頁
 主題可換 \`default\`、\`gaia\`、\`uncover\`
 `;
+
+// ── 在預覽調整簡報：每頁在原文的範圍、讀寫設定、新增複製刪除投影片 ──
+// 都是「原文進、原文出」的純函式，以行為單位改寫，只動需要改的那幾行
+
+// front matter 佔幾行，也就是第 1 頁從第幾行開始
+const frontMatterLines = (markdown) =>
+  markdown.match(FRONT_MATTER)?.[0].replace(/\r?\n$/, "").split("\n").length ?? 0;
+
+// 只寫一個設定的註解，例如 <!-- _class: lead -->
+// ponytail: 程式碼區塊裡剛好有一行一樣的註解也會被當成設定，真的遇到再改用 Marp 的 token 找
+// 值不能跨過 -->：一行寫了好幾個註解時不算，整行換掉會把其他設定一起刪掉
+const directiveLine = (key) => new RegExp(`^\\s*<!--\\s*${key}\\s*:(?:(?!-->).)*-->\\s*$`);
+
+// YAML 特殊字元用 JSON 字串包起來（JSON 字串也是合法的 YAML），不然 `footer: 公司: 研發部` 會解析失敗
+// 冒號後面接空白才特別，4:3 照寫；反斜線也要：Marp 把沒引號的值當成雙引號字串，C:\Users 的 \U 會讓整個 front matter 解析失敗
+const yamlValue = (value) =>
+  /: |:$| #|\\|^[\s\-?!&*|>%@`"'[{#]|\s$/.test(value) ? JSON.stringify(value) : value;
+
+// 用 Marp 自己的解析器找每頁的範圍：程式碼區塊裡的 --- 不算分頁，*** 也能分頁
+// 第 2 頁以後的 start 是分隔線那一行，end 是下一頁的 start（不含）；第 1 頁從 front matter 後面開始
+// directives：這頁實際套用的設定（含延續下來的）；global：整份的設定（theme、size、headingDivider）
+// bgs：這頁每張背景圖所在的行；用 Marp 的 image token 找，程式碼裡的 ![bg] 不算
+// 算不出來（解析失敗、token 沒有行號）回傳 null，工具列就不顯示
+export const slideRanges = (marp, markdown) => {
+  let tokens;
+  try {
+    tokens = marp.markdown.parse(markdown, {}); // 沒給 env 的話，參考連結、註腳會丟錯
+  } catch {
+    return null;
+  }
+  const opens = tokens.filter((t) => t.type === "marpit_slide_open");
+  if (!opens.length || opens.some((t) => !t.map)) return null;
+  const starts = opens.map((t, i) => (i === 0 ? frontMatterLines(markdown) : t.map[0]));
+  const total = markdown.split("\n").length;
+  const bgs = opens.map(() => []);
+  let slide = -1;
+  for (const t of tokens) {
+    if (t.type === "marpit_slide_open") slide++;
+    // 整段只有背景圖時 Marp 會把它改成 marpit_hidden_inline
+    if ((t.type !== "inline" && t.type !== "marpit_hidden_inline") || !t.map) continue;
+    let line = t.map[0]; // 一段文字可能跨好幾行：數前面有幾個換行
+    for (const c of t.children) {
+      if (c.type === "softbreak" || c.type === "hardbreak") line++;
+      if (c.type === "image" && c.meta?.marpitImage?.background) bgs[slide].push(line);
+    }
+  }
+  return {
+    slides: opens.map((t, i) => ({
+      start: starts[i],
+      end: starts[i + 1] ?? total,
+      separator: i > 0,
+      directives: t.meta.marpitDirectives,
+      bgs: bgs[i],
+    })),
+    global: { ...marp.lastGlobalDirectives },
+  };
+};
+
+// front matter 裡某個 key 的值（去掉引號），沒寫就是 undefined
+export const readFrontMatter = (markdown, key) => {
+  const raw = markdown
+    .match(FRONT_MATTER)?.[1]
+    .match(new RegExp(`^${key}\\s*:\\s*(.*?)\\s*$`, "m"))?.[1];
+  if (raw === undefined) return undefined;
+  if (raw.startsWith('"')) {
+    try {
+      return JSON.parse(raw);
+    } catch {
+      return raw;
+    }
+  }
+  return raw.replace(/^'(.*)'$/, "$1");
+};
+
+// 整份設定：theme、size 寫在註解裡就改最後一個（Marp 套用最後一個）
+// paginate、header、footer 會從寫的那一頁往後延續，只改 front matter，中途的註解是使用者刻意寫的
+// 都沒有就加在 front matter 最後面；值是空的就刪掉那一行
+export const setGlobal = (markdown, key, value) => {
+  const lines = markdown.split("\n");
+  const fmEnd = frontMatterLines(markdown);
+  const empty = value === "" || value == null;
+  const text = empty ? "" : yamlValue(String(value));
+  const write = (i, line) => {
+    if (empty) lines.splice(i, 1);
+    else lines[i] = line;
+    return lines.join("\n");
+  };
+  if (key === "theme" || key === "size") {
+    const re = directiveLine(key);
+    const i = lines.findLastIndex((line, n) => n >= fmEnd && re.test(line));
+    if (i >= 0) return write(i, `<!-- ${key}: ${text} -->`);
+  }
+  if (!fmEnd) return markdown; // 簡報一定有 front matter（marp: true）
+  const re = new RegExp(`^${key}\\s*:`);
+  const i = lines.findIndex((line, n) => n > 0 && n < fmEnd - 1 && re.test(line));
+  if (i >= 0) return write(i, `${key}: ${text}`);
+  if (empty) return markdown;
+  lines.splice(fmEnd - 1, 0, `${key}: ${text}`);
+  return lines.join("\n");
+};
+
+// 單頁設定：在這頁找 <!-- _key: ... -->，有就改，沒有就插在這頁開頭（分隔線下一行），null 就刪掉
+export const setSpot = (markdown, range, key, value) => {
+  const lines = markdown.split("\n");
+  const re = directiveLine(`_${key}`);
+  const i = lines.findIndex((line, n) => n >= range.start && n < range.end && re.test(line));
+  const line = `<!-- _${key}: ${value} -->`;
+  if (i >= 0) {
+    if (value == null) lines.splice(i, 1);
+    else lines[i] = line;
+  } else if (value != null) {
+    lines.splice(range.separator ? range.start + 1 : range.start, 0, line);
+  }
+  return lines.join("\n");
+};
+
+// 比較時統一格式：class 可能是 YAML 陣列或多個空白；paginate 沒寫等於 false，hold 也有顯示頁碼
+const normalize = {
+  class: (v) => (Array.isArray(v) ? v.join(" ") : (v ?? "")).split(/\s+/).filter(Boolean).join(" "),
+  paginate: (v) => v === true || v === "hold",
+};
+
+// 只寫只影響當頁的 _key：跟「這頁不寫 _key 時會套用的值」（延續下來的）一樣就刪掉那一行，不一樣才寫
+// 延續下來的值用拿掉這行後重新解析得到，跟 Marp 的規則一定一致
+// class 是空的要寫 ""，才蓋得掉延續下來的 class
+export const setSpotDirective = (marp, markdown, index, key, value) => {
+  const range = slideRanges(marp, markdown)?.slides[index];
+  if (!range) return markdown;
+  const without = setSpot(markdown, range, key, null);
+  const inherited = slideRanges(marp, without)?.slides[index]?.directives[key];
+  if (normalize[key](value) === normalize[key](inherited)) return without;
+  const text = key === "class" ? normalize.class(value) || '""' : String(value);
+  const next = setSpot(markdown, range, key, text);
+  // 設定寫在多行註解裡時 setSpot 找不到，插進去的那行會被後面的註解蓋掉：寧可不改也不寫一行沒作用的
+  const applied = slideRanges(marp, next)?.slides[index]?.directives[key];
+  return normalize[key](applied) === normalize[key](value) ? next : markdown;
+};
+
+// 置中（lead）、深色（invert）開關：從這頁實際套用的 class 增減，其他 class 原樣保留
+export const toggleClass = (marp, markdown, index, name) => {
+  const range = slideRanges(marp, markdown)?.slides[index];
+  if (!range) return markdown;
+  const classes = normalize.class(range.directives.class).split(" ").filter(Boolean);
+  const next = classes.includes(name) ? classes.filter((c) => c !== name) : [...classes, name];
+  return setSpotDirective(marp, markdown, index, "class", next.join(" "));
+};
+
+// 插入一段投影片：前一行有字的話先空一行，不然 --- 會變成上一段的標題底線
+const insertLines = (lines, at, block) => {
+  lines.splice(at, 0, ...(lines[at - 1]?.trim() ? ["", ...block] : block));
+  return lines.join("\n");
+};
+
+// 在這頁後面插入一頁空白投影片
+export const addSlide = (markdown, range) =>
+  insertLines(markdown.split("\n"), range.end, ["---", "", ""]);
+
+// 把這頁的原文（含分隔線）複製一份插在後面；第 1 頁沒有分隔線要補一條，front matter 不複製
+export const duplicateSlide = (markdown, range) => {
+  const lines = markdown.split("\n");
+  const body = lines.slice(range.start, range.end);
+  return insertLines(lines, range.end, range.separator ? body : ["---", ...body]);
+};
+
+// 整份共用的設定寫在哪一頁都一樣，刪頁時要留下來，不然整份簡報的主題、比例跟著變
+const GLOBAL_LINE = /^\s*<!--\s*(theme|size|style|math|lang|headingDivider)\s*:.*-->\s*$/;
+
+// 刪掉這頁；刪第 1 頁時連第 2 頁的分隔線一起刪，front matter 保留。只剩一頁不能刪
+// 這頁的 theme、size、style 等整份設定的註解和 <style> 區塊留在原位；延續的 class、paginate 是這頁寫的內容，一起刪
+export const deleteSlide = (markdown, slides, index) => {
+  if (slides.length < 2) return markdown;
+  const lines = markdown.split("\n");
+  const { start, end } = slides[index];
+  const removed = lines.splice(start, (index === 0 ? slides[1].start + 1 : end) - start);
+  // 沒有 scoped 的 <style> 套用到整份，整個區塊照樣留下；程式碼區塊裡的是範例，跟著刪
+  let inStyle = false;
+  let inFence = false;
+  const kept = removed.filter((line) => {
+    const fence = !inStyle && /^\s*(```|~~~)/.test(line);
+    if (fence) inFence = !inFence;
+    if (fence || inFence) return false;
+    if (!inStyle && /^\s*<style(?![^>]*\bscoped\b)[\s>]/.test(line)) inStyle = true;
+    const keep = inStyle || GLOBAL_LINE.test(line);
+    if (/<\/style>/.test(line)) inStyle = false;
+    return keep;
+  });
+  lines.splice(start, 0, ...kept);
+  return lines.join("\n");
+};
+
+// ── 背景圖：位置、寬度是整頁的，其他只調這頁第一張 ![bg ...](網址)，面板不認得的字原樣保留 ──
+
+// 網址可以有一層成對的括號（維基百科常見），後面的 title 另外抓，寫回時原樣接上
+// ponytail: 同一行前面剛好有行內程式碼寫的 ![bg] 會先被找到，真的遇到再用 token 的位置判斷
+const BG = /!\[\s*bg(?:\s+([^\]]*))?\]\(\s*((?:[^\s()]|\([^\s()]*\))*)(\s+(?:"[^"]*"|'[^']*'|\([^)]*\)))?\s*\)/g;
+
+// 這頁每張背景圖的 match；同一行可以寫好幾張，用「這一行的第幾張」找
+const bgMatches = (lines, bgs) =>
+  bgs.map((line, i) => ({
+    line,
+    m: [...(lines[line] ?? "").matchAll(BG)][bgs.slice(0, i).filter((l) => l === line).length],
+  }));
+
+const words = (m) => (m[1] ?? "").split(/\s+/).filter(Boolean);
+
+// left、right 沒帶比例是 Marp 預設的 50%
+const isSide = (word) => /^(left|right)(:\d+(\.\d+)?%)?$/.test(word);
+
+// 只換空白和括號：會讓圖片語法斷掉的只有這些；encodeURI 會把已經編碼的 %20 再編成 %2520
+const encodeUrl = (url) =>
+  url.trim().replace(/ /g, "%20").replace(/\(/g, "%28").replace(/\)/g, "%29");
+
+// 濾鏡的數值：沒帶數值用 Marp 的預設值，50% 換成 0.5；不是數字回傳 NaN，當成不認得的字
+const filterValue = (value, preset) =>
+  value === undefined ? preset : value.endsWith("%") ? parseFloat(value) / 100 : parseFloat(value);
+
+// 拆成面板的欄位，其他字依原本順序放進 rest；沒有背景圖回傳 null
+// 位置、寬度 Marp 以最後一張寫了 left、right 的為準，所以每張都要看；後面只寫 left、right 沒帶比例的不會把比例改回 50%
+// brightness、opacity 沒帶數值是 Marp 預設的 1.5、0.5
+// ponytail: 寫兩次 Marp 會疊加（brightness(0.3) brightness(0.8)），面板只認最後一個；面板自己只寫一個，手寫兩次很少見
+// tone：完整的 grayscale 或 sepia（數值是 1）；只套一半的、兩個都寫時的第二個，面板表示不了，留在 rest
+export const readBackground = (markdown, range) => {
+  const found = bgMatches(markdown.split("\n"), range.bgs);
+  const m = found[0]?.m;
+  if (!m) return null;
+  const bg = {
+    line: found[0].line,
+    bgs: range.bgs,
+    count: range.bgs.length,
+    url: m[2],
+    title: m[3] ?? "",
+    side: "",
+    width: 50,
+    fit: "cover",
+    brightness: 1,
+    opacity: 1,
+    tone: "",
+    rest: [],
+  };
+  for (const word of words(m).filter((w) => !isSide(w))) {
+    const [key, value] = word.split(":");
+    if (word === "cover" || word === "contain" || word === "fit" || word === "auto") {
+      bg.fit = word === "fit" ? "contain" : word; // auto：原尺寸，面板多列一個選項，不放進 rest 才不會蓋掉選的值
+    } else if ((key === "brightness" || key === "opacity") && !isNaN(filterValue(value, 1))) {
+      bg[key] = filterValue(value, key === "brightness" ? 1.5 : 0.5);
+    } else if ((key === "grayscale" || key === "sepia") && !bg.tone && filterValue(value, 1) === 1) {
+      bg.tone = key;
+    } else {
+      bg.rest.push(word);
+    }
+  }
+  for (const word of found.flatMap((f) => (f.m ? words(f.m) : [])).filter(isSide)) {
+    const [side, width] = word.split(":");
+    bg.side = side;
+    if (width) bg.width = parseFloat(width);
+  }
+  return bg;
+};
+
+// 組回圖片語法：只寫跟預設值不同的欄位，rest 接在後面
+const backgroundText = (bg) =>
+  `![${[
+    "bg",
+    bg.side && `${bg.side}:${bg.width}%`,
+    bg.fit !== "cover" && bg.fit,
+    bg.brightness !== 1 && `brightness:${bg.brightness}`,
+    bg.opacity !== 1 && `opacity:${bg.opacity}`,
+    bg.tone,
+    ...bg.rest,
+  ]
+    .filter(Boolean)
+    .join(" ")}](${encodeUrl(bg.url)}${bg.title ?? ""})`;
+
+// 把第 line 行 m 那段換成 text
+const splice = (lines, line, m, text) => {
+  lines[line] = lines[line].slice(0, m.index) + text + lines[line].slice(m.index + m[0].length);
+};
+
+// bg：readBackground 讀到的欄位改過後傳回來；第一張換成新的語法，其他張拿掉 left、right，位置只寫在第一張
+// 從後面改回來：同一行有好幾張時，前面的位置才不會跑掉
+export const writeBackground = (markdown, bg) => {
+  const lines = markdown.split("\n");
+  for (const { line, m, i } of bgMatches(lines, bg.bgs).map((f, i) => ({ ...f, i })).reverse()) {
+    if (!m) continue;
+    if (i === 0) splice(lines, line, m, backgroundText(bg));
+    else if (words(m).some(isSide)) {
+      splice(lines, line, m, `![${["bg", ...words(m).filter((w) => !isSide(w))].join(" ")}](${m[2]}${m[3] ?? ""})`);
+    }
+  }
+  return lines.join("\n");
+};
+
+// 預設左文右圖（範本的示範）；插在這頁開頭的設定註解、空行後面，下面空一行跟內容隔開
+export const addBackground = (markdown, range, url) => {
+  const lines = markdown.split("\n");
+  let at = range.separator ? range.start + 1 : range.start;
+  while (at < range.end && /^\s*$|^\s*<!--.*-->\s*$/.test(lines[at])) at++;
+  const text = backgroundText({ url, side: "right", width: 40, fit: "cover", brightness: 1, opacity: 1, tone: "", rest: [] });
+  lines.splice(at, 0, ...(lines[at]?.trim() ? [text, ""] : [text]));
+  return lines.join("\n");
+};
+
+// 那一行只有圖片語法就整行刪掉（連同下面多出來的空行），還有其他字就只刪圖片語法
+export const removeBackground = (markdown, bg) => {
+  const lines = markdown.split("\n");
+  splice(lines, bg.line, bgMatches(lines, bg.bgs)[0].m, "");
+  if (!lines[bg.line].trim()) {
+    lines.splice(bg.line, 1);
+    if (!lines[bg.line]?.trim() && !lines[bg.line - 1]?.trim()) lines.splice(bg.line, 1);
+  }
+  return lines.join("\n");
+};
