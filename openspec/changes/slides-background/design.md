@@ -15,7 +15,7 @@ Marp 的背景圖寫成 `![bg 關鍵字...](網址)`，關鍵字之間用空白�
 - 面板沒有的設定原樣保留，絕不因為介面沒有這個選項就把它刪掉
 
 **Non-Goals:**
-- `contrast`、`saturate`、`sepia` 等其他濾鏡，以及 `w:`、`h:`、百分比縮放
+- 亮度以外的濾鏡（`blur`、`grayscale`、`contrast`、`sepia` 等），以及 `w:`、`h:`、百分比縮放：手寫的會放進 `rest` 原樣保留。模糊、黑白不做的原因：比較少用，而且 `blur` 帶單位、`grayscale` 有數值又只適合做成開關，每多一個就多一組解析規則和預設值
 - 多張背景圖的排列、`vertical`
 - 投影片內一般圖片（非背景）的大小調整
 - 上傳圖片：這個工具不存放檔案，只能貼網址
@@ -27,10 +27,12 @@ Marp 的背景圖寫成 `![bg 關鍵字...](網址)`，關鍵字之間用空白�
 - 不直接對原文用正規表示式：程式碼區塊和行內程式碼裡的 `![bg]` 都會被誤判，範本第 3 頁就有一個寫在行內程式碼裡的示範
 
 把方括號裡的字逐一分類：
-- 認得的字轉成欄位：`side`（`left`、`right` 或空）、`width`（只寫 `left`、`right` 沒帶比例時是 Marp 預設的 50%）、`fit`（`cover`、`contain`；`fit` 視為 `contain`）、`brightness`、`blur`、`grayscale`
+- 認得的字轉成欄位：`side`（`left`、`right` 或空）、`width`（只寫 `left`、`right` 沒帶比例時是 Marp 預設的 50%）、`fit`（`cover`、`contain`；`fit` 視為 `contain`）、`brightness`
 - 其他字依原本的順序放進 `rest`
 
-`writeBackground` 組回 `bg` + 欄位 + `rest`，並且只輸出跟預設值不同的欄位，例如 `brightness` 是 1、`blur` 是 0 時不寫。找不到 `![bg` 時回傳 null，工具列顯示成「新增」。
+`brightness` 只寫名稱、不帶數值時，Marp 會當成 1.5（已驗證 `![bg brightness]` 會變成 `brightness(1.5)`），解析時要照這個值讀，不能當成不認得的字，否則再拉亮度會寫出 `brightness:0.5 brightness`。寫回時一律寫完整的 `brightness:數值`。寫了兩次時以最後一個為準，寫回時只留一個。
+
+`writeBackground` 組回 `bg` + 欄位 + `rest`，並且只輸出跟預設值不同的欄位，例如 `brightness` 是 1、`fit` 是 `cover` 時不寫。找不到 `![bg` 時回傳 null，工具列顯示成「新增」。
 
 ### 拉桿放開時才寫回
 拉桿在 `change`（放開）時才寫回原文，不在 `input`（拖動中）就寫。

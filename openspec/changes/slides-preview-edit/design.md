@@ -15,23 +15,35 @@
 - 顏色調色盤（`backgroundColor`、`color`）：主題和深色頁已經涵蓋需求，真的需要可以自己手寫
 - 字體、字級、分欄：Marp 沒有這種設定，要寫 CSS 或 HTML
 - 在預覽直接改文字、拖拉元素位置：預覽元素對不回原文，Markdown 也沒有座標
-- 縮圖側欄、拖拉排序：先用上移、下移
+- 調整頁序（上移、下移、縮圖側欄、拖拉排序）：在原文剪下貼上。不做上移、下移的原因：
+  - 工具列跟著滑鼠所在的那一頁，下移後滑鼠底下換成另一頁，連按會移到別頁，要讓工具列和捲動位置跟著被移動的那一頁走才好用
+  - 頁裡不帶底線的 `class`、`paginate`、`footer` 會往後延續，移動這頁會改到其他頁的樣子
+  - 一次只能移一格，移遠一點反而比在原文剪下貼上慢
 - 背景圖（在 `slides-background` 處理）、講者備註（在 `slides-speaker-notes` 處理）
 
 ## Decisions
 
 ### 用 Marp 自己的解析器找每頁的範圍
-`slideRanges(marp, markdown)` 呼叫 `marp.markdown.parse`，從每個 `marpit_slide_open` 的 `map[0]` 取得每頁的起始行，下一頁的起始行就是這頁的結尾，最後一頁到原文結尾。第 2 頁以後的第一行是分隔線（`---` 或 `***`）。第 1 頁的 `map[0]` 是 0，範圍包含 front matter，要另外改成從 front matter 結束的下一行開始，否則刪除、移動第 1 頁會連 front matter 一起搬走。同時記下 `meta.marpitDirectives`，工具列用它顯示目前的狀態。
+`slideRanges(marp, markdown)` 呼叫 `marp.markdown.parse`，從每個 `marpit_slide_open` 的 `map[0]` 取得每頁的起始行，下一頁的起始行就是這頁的結尾，最後一頁到原文結尾。第 2 頁以後的第一行是分隔線（`---` 或 `***`）。第 1 頁的 `map[0]` 是 0，範圍包含 front matter，要另外改成從 front matter 結束的下一行開始，否則刪除、複製第 1 頁會連 front matter 一起處理到。同時記下 `meta.marpitDirectives`，工具列用它顯示目前的狀態。
 - 只在點擊或滑鼠移過去時才算，不在每次打字時算：解析一次要幾 ms，而且只有用到工具時才需要
 - 不自己用 `---` 切：會被程式碼區塊和 `headingDivider` 搞錯
 - 第 N 頁就是第 N 個 `svg[data-marpit-svg]`，跟 `Presenter` 數頁數的方式一樣
 
-### 整份設定：改最後一次出現的位置
-Marp 的整份設定可以寫在 front matter，也可以寫在任何一頁的 `<!-- theme: x -->`，後面出現的會蓋過前面的。`setGlobal(markdown, key, value)` 的規則：
-1. 有寫在註解裡的話，改最後一個註解（只認一個註解只寫這一個 key 的情況）
-2. 否則改 front matter 裡那一行
+### 整份設定：`theme`、`size` 改最後一次出現的位置，`paginate`、`footer` 只改 front matter
+設定列的四個 key 在 Marp 裡分成兩種（已驗證）：
+- `theme`、`size` 是整份共用的設定：可以寫在 front matter，也可以寫在任何一頁的 `<!-- theme: x -->`，後面出現的會蓋過前面的，整份只有一個值
+- `paginate`、`footer` 是從這頁往後延續的設定：寫在第 3 頁的 `<!-- paginate: false -->` 只影響第 3 頁以後，第 1、2 頁還是 front matter 的值
+
+`setGlobal(markdown, key, value)` 的規則：
+1. `theme`、`size` 有寫在註解裡的話，改最後一個註解（只認一個註解只寫這一個 key 的情況）
+2. 否則改 front matter 裡那一行；`paginate`、`footer` 一律只走這一步，不改任何註解
 3. 都沒有的話，加在 front matter 的最後一行
 4. 值是空的（例如清空頁尾）就刪掉那一行
+
+設定列的初始狀態：`theme`、`size` 用最後一頁實際套用的值（`marpitDirectives`）；`paginate`、`footer` 讀 front matter 那一行，沒寫就是未開啟、空白。
+- 不用「實際套用的值」顯示 `paginate`、`footer`：每頁可能不同，設定列不知道該顯示哪一頁
+- 改 `paginate`、`footer` 也不去改中途的 `<!-- paginate: false -->` 註解：那是使用者刻意從某頁開始改的，設定列只管開頭的預設值
+
 - 只改那一行，不重新產生整個 front matter：保留使用者的註解和排列順序
 - 不引入 YAML 套件：這四個 key 都是單行的純量
 - 值有 YAML 特殊字元時（`:`、`#`、開頭是 `-`、`[`、`{`、引號等）用 `JSON.stringify` 包起來，JSON 字串本身就是合法的 YAML；不然 `footer: 公司: 研發部` 會讓 Marp 解析失敗
@@ -49,8 +61,7 @@ Marp 的整份設定可以寫在 front matter，也可以寫在任何一頁的 `
 - 新增：在這頁結尾插入 `\n---\n\n`
 - 複製：把這頁的原文（含分隔線）插在下一頁前面；第 1 頁要另外補一條分隔線
 - 刪除：刪掉這頁的範圍；刪第 1 頁時改成刪掉第 1 頁的內容和第 2 頁的分隔線，front matter 保留。只剩一頁時不能刪
-- 上移、下移：兩頁的內容（不含分隔線）互換，分隔線留在原位
-- 有設定 `headingDivider` 時隱藏這些操作：那種簡報的分頁沒有分隔線，搬移原文的結果難以預測。版型和頁碼的開關照樣可以用
+- 有設定 `headingDivider` 時隱藏這些操作：那種簡報的分頁沒有分隔線，改寫原文的結果難以預測。版型和頁碼的開關照樣可以用
 
 ### 工具疊在預覽上
 跟 `TableTools` 一樣，量 svg 的位置後把工具列疊在投影片右上角，不動預覽的 HTML。投影片下方留給 `slides-speaker-notes` 的備註，兩個功能都做完時才不會互相蓋住。整份設定列放在預覽最上方。每次修改都經過 `replaceText`，所以可以用 Ctrl+Z 還原。

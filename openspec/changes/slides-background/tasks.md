@@ -1,14 +1,14 @@
 ## 1. 解析與改寫（`src/slides.js`）
 
-- [ ] 1.1 `readBackground(tokens, markdown, range)`：用 Marp 解析結果的 image token 找出這頁的背景圖數量和第一張所在的行，再拆成欄位和 `rest`；只寫 `left`、`right` 時寬度是 50%
+- [ ] 1.1 `readBackground(tokens, markdown, range)`：用 Marp 解析結果的 image token 找出這頁的背景圖數量和第一張所在的行，再拆成欄位和 `rest`；只寫 `left`、`right` 時寬度是 50%；只寫 `brightness` 不帶數值時是 1.5
 - [ ] 1.2 `writeBackground(bg)`：只輸出跟預設值不同的欄位，`rest` 依原本順序接在後面
 - [ ] 1.3 `addBackground`、`removeBackground`，包括網址編碼（只換空白和括號）和刪整行或只刪語法的判斷
-- [ ] 1.4 測試：保留不認得的字、`fit` 視為 `contain`、預設值不輸出、多張背景圖、網址編碼和已編碼的網址、行內程式碼裡的 `![bg]` 不算、`left` 沒帶比例是 50%
+- [ ] 1.4 測試：保留不認得的字、`fit` 視為 `contain`、預設值不輸出、多張背景圖、網址編碼和已編碼的網址、行內程式碼裡的 `![bg]` 不算、`left` 沒帶比例是 50%、只寫 `brightness` 沒帶數值、`brightness` 寫兩次、`blur`、`grayscale` 原樣留在 `rest`
 
 ## 2. 介面
 
 - [ ] 2.1 單頁工具列加「背景圖」按鈕：沒有背景圖時輸入網址，有背景圖時打開面板
-- [ ] 2.2 背景圖面板：位置、寬度、填滿方式、亮度、模糊、黑白、網址、移除；拉桿放開時才寫回
+- [ ] 2.2 背景圖面板：位置、寬度、填滿方式、亮度、網址、移除；拉桿放開時才寫回
 
 ## 3. 驗證與文件
 

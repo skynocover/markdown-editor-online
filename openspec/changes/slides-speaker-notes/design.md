@@ -22,7 +22,7 @@
 `renderSlides` 回傳 `{ slides, html, css, notes }`，其中 `notes` 是 `comments` 每頁的字串陣列，以兩個換行串起來。唯讀預覽的 `view` 也會有 `notes`，但不顯示。
 
 ### 預覽的備註用 DOM 插入純文字
-預覽的投影片是一整段 `dangerouslySetInnerHTML`。在 `useLayoutEffect` 裡找出每個 `svg[data-marpit-svg]`，在後面插入 `div.slide-notes`，用 `textContent` 放入備註（`white-space: pre-wrap`），html 或 notes 改變時重插。
+預覽的投影片是一整段 `dangerouslySetInnerHTML`。在 `useLayoutEffect` 裡找出每個 `svg[data-marpit-svg]`，在後面插入 `div.slide-notes`，用 `textContent` 放入備註（`white-space: pre-wrap`），html 或 notes 改變時重插。重插前先刪掉預覽裡所有舊的 `div.slide-notes`：只改備註時 html 不會變（Marp 的 html 不含備註），`{__html}` 不會重設，舊節點還留在 DOM 裡。
 - 用 `textContent`，不用 innerHTML：分享連結的內容不可信任，備註不能被當成 HTML 執行
 - 不在 HTML 字串裡用 `</svg>` 切開：投影片內容裡也可能有巢狀的 svg（例如數學公式）
 - 預覽的 `{__html}` 已經用 `useMemo` 記住，React 不會把插入的節點洗掉
@@ -34,9 +34,9 @@
 1. 用 `window.open("", "speaker", ...)` 開一個空白的同源視窗
 2. 把主頁面 `<head>` 裡的樣式表複製過去；`<link>` 用解析後的絕對網址 `link.href`，空白頁的相對路徑不一定解析得到
 3. 用 `createPortal` 把 `SpeakerView` 渲染進那個視窗的 `document.body`
-4. 主視窗進入 `Presenter` 並要求全螢幕
+4. 主視窗進入 `Presenter`，不要求全螢幕（原因見下方「全螢幕」）
 
-`page` 從 `Presenter` 移到外層的 state，兩個視窗共用，所以天然就是同步的，不需要訊息傳遞。鍵盤事件在主視窗和講者視窗的 `window` 都要聽，按鍵的意義相同；在講者視窗按 Esc 也是結束播放。
+`page` 從 `Presenter` 移到外層的 state，兩個視窗共用，所以天然就是同步的，不需要訊息傳遞。鍵盤事件在主視窗的 `window` 和 `speakerWindow` 都要掛（`Presenter` 現在只掛主視窗的 `window`），按鍵的意義相同；在講者視窗按 Esc 也是結束播放。
 - 不用 BroadcastChannel 加獨立頁面：那樣要多一個建置入口，還要自己處理狀態同步。portal 只多一個元件
 - 講者視窗的 `pagehide` 事件只把講者模式關掉；結束播放時呼叫 `speakerWindow.close()`
 
@@ -54,6 +54,10 @@
 
 ### 全螢幕
 瀏覽器只允許使用者的操作觸發全螢幕，而 `window.open` 會用掉這次點擊的使用者操作權限，所以講者模式下主視窗的全螢幕要求預期幾乎都會失敗。講者模式就不要求全螢幕，直接把「拖到投影機再切全螢幕」當成主要流程：主視窗的播放畫面角落提供「全螢幕」按鈕，也可以按 `F`。一般播放照舊直接全螢幕。
+
+`Presenter` 現在聽 `fullscreenchange`，離開全螢幕就結束播放。這個規則只留給一般播放：一般播放是一開始就全螢幕，離開全螢幕等於不播了。講者模式不掛這個監聽，離開全螢幕（再按一次 `F`，或按 Esc 讓瀏覽器退出全螢幕）只回到視窗播放，不結束；要結束就在沒有全螢幕時按 Esc，或按「結束播放」。
+- 原因：講者模式是在播放中途才切全螢幕，按 `F` 切回來就把講者視窗一起關掉，不符合「切換」的意思
+- 代價：講者模式在全螢幕時要按兩次 Esc 才結束（第一次是瀏覽器退出全螢幕，收不到 keydown）
 
 ## Risks / Trade-offs
 

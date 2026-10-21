@@ -1,7 +1,7 @@
 ## ADDED Requirements
 
 ### Requirement: 整份簡報設定列
-編輯模式下打開簡報時，系統 SHALL 在預覽上方顯示主題（default、gaia、uncover）、比例（16:9、4:3）、頁碼開關和頁尾文字，並以目前實際套用的值作為初始狀態。修改時 SHALL 只改原文裡對應的那一行：設定寫在註解裡時改最後一個註解，否則改 front matter 那一行；都沒有的話加在 front matter 的最後面。值清空時 SHALL 刪掉那一行。值含有 YAML 特殊字元時 SHALL 用引號包起來。
+編輯模式下打開簡報時，系統 SHALL 在預覽上方顯示主題（default、gaia、uncover）、比例（16:9、4:3）、頁碼開關和頁尾文字，修改時 SHALL 只改原文裡對應的那一行。主題、比例 SHALL 以目前實際套用的值作為初始狀態；設定寫在註解裡時改最後一個註解，否則改 front matter 那一行。頁碼、頁尾會從寫的那一頁往後延續，SHALL 只讀寫 front matter 那一行，不改任何頁裡的註解。front matter 沒有那一行時 SHALL 加在 front matter 的最後面。值清空時 SHALL 刪掉那一行。值含有 YAML 特殊字元時 SHALL 用引號包起來。
 
 #### Scenario: 換主題
 - **WHEN** front matter 有 `theme: gaia`，使用者選 uncover
@@ -15,6 +15,14 @@
 - **WHEN** 第一頁有 `<!-- theme: gaia -->`，使用者選 default
 - **THEN** 改成 `<!-- theme: default -->`，不在 front matter 另外加一行
 
+#### Scenario: 頁碼只改 front matter
+- **WHEN** front matter 有 `paginate: true`，第 3 頁有 `<!-- paginate: false -->`，使用者在設定列關掉頁碼
+- **THEN** front matter 那一行變成 `paginate: false`，第 3 頁的註解不變
+
+#### Scenario: 頁碼寫在中途的註解裡
+- **WHEN** front matter 沒有 `paginate`，第 3 頁有 `<!-- paginate: true -->`
+- **THEN** 設定列的頁碼顯示成未開啟；使用者打開時在 front matter 加上 `paginate: true`
+
 #### Scenario: 頁尾有冒號
 - **WHEN** 使用者把頁尾設成 `公司: 研發部`
 - **THEN** 寫入 `footer: "公司: 研發部"`，簡報照常顯示
@@ -24,7 +32,7 @@
 - **THEN** 刪掉那一行
 
 ### Requirement: 單頁版型與頁碼
-滑鼠移到投影片上時，系統 SHALL 在該頁右上角顯示「置中」、「深色」、「隱藏頁碼」開關，並以這頁實際套用的設定作為初始狀態。切換時 SHALL 只寫入只影響當頁的設定（`_class`、`_paginate`），新的值 SHALL 從這頁實際套用的值增減（包括從前面頁延續下來的 `class`）。新的值跟延續下來的值相同時 SHALL 刪掉那一行，否則這頁已經有該設定就改，沒有就插在這頁開頭。`lead`、`invert` 以外的 class SHALL 原樣保留。
+滑鼠移到投影片上，或在觸控裝置點一下投影片時，系統 SHALL 在該頁右上角顯示「置中」、「深色」、「隱藏頁碼」開關，並以這頁實際套用的設定作為初始狀態。切換時 SHALL 只寫入只影響當頁的設定（`_class`、`_paginate`），新的值 SHALL 從這頁實際套用的值增減（包括從前面頁延續下來的 `class`）。新的值跟延續下來的值相同時 SHALL 刪掉那一行，否則這頁已經有該設定就改，沒有就插在這頁開頭。`lead`、`invert` 以外的 class SHALL 原樣保留。
 
 #### Scenario: 設成封面頁
 - **WHEN** 使用者在沒有任何設定的投影片上打開「置中」
@@ -54,24 +62,20 @@
 - **WHEN** 使用者在某頁打開「隱藏頁碼」
 - **THEN** 這頁插入 `<!-- _paginate: false -->`，其他頁的頁碼不受影響
 
-### Requirement: 新增、複製、刪除、移動投影片
-單頁工具列 SHALL 提供新增（插在這頁後面）、複製、刪除、上移、下移。每頁的原文範圍 SHALL 由 Marp 解析器決定，程式碼區塊裡的 `---` 不算分頁。只剩一頁時 SHALL 不能刪除；第一頁不能上移，最後一頁不能下移。設定了 `headingDivider` 時 SHALL 隱藏這些操作。
+### Requirement: 新增、複製、刪除投影片
+單頁工具列 SHALL 提供新增（插在這頁後面）、複製（插在這頁後面）、刪除。每頁的原文範圍 SHALL 由 Marp 解析器決定，程式碼區塊裡的 `---` 不算分頁。只剩一頁時 SHALL 不能刪除。設定了 `headingDivider` 時 SHALL 隱藏這些操作。
 
 #### Scenario: 新增投影片
 - **WHEN** 使用者在第 2 頁按「新增」
 - **THEN** 第 2 頁後面多一頁空白投影片
 
-#### Scenario: 下移
-- **WHEN** 使用者在第 2 頁按「下移」
-- **THEN** 第 2、3 頁的內容互換，分隔線留在原位
-
 #### Scenario: 刪除第一頁
 - **WHEN** 簡報有 3 頁，使用者刪除第 1 頁
 - **THEN** 原本的第 2 頁變成第 1 頁，front matter 保留
 
-#### Scenario: 移動第一頁
-- **WHEN** 使用者把第 1 頁下移
-- **THEN** 第 1、2 頁的內容互換，front matter 留在原位
+#### Scenario: 複製第一頁
+- **WHEN** 使用者複製第 1 頁
+- **THEN** 第 1 頁後面多一頁一樣的內容，中間補一條分隔線，front matter 只有一份
 
 #### Scenario: 程式碼裡的分隔線
 - **WHEN** 第 1 頁的程式碼區塊裡有一行 `---`，使用者複製第 1 頁
