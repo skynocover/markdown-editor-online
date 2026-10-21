@@ -9,9 +9,9 @@
 用 `pele@1.8.0` 在 Node 實測過：
 - `render(text, options)` 是同步的，回傳 `{ svg, width, height, type }`
 - 輸出只用到 `svg`、`g`、`path`、`rect`、`circle`、`text`、`tspan`，沒有 `<style>`、`foreignObject`、`<script>`；顏色用根節點 `style` 屬性裡的 `var(--pele-*)`，並且自帶 `max-width:100%;height:auto`
-- 標籤裡的 `<img onerror>`、`click A "javascript:…"` 都被跳脫或濾掉
+- 標籤裡的 `<img onerror>` 整個被拿掉（不是跳脫成文字），`click A "javascript:…"` 被濾掉
 - 錯誤丟出 `PeleError`，帶 `code`（`unsupported-diagram` | `syntax` | `semantic` | `limit`）、`line`、`message`
-- 輸出有 `id` 屬性，值直接是節點名稱（`A`、`L_A_B_0`），時序圖同一張圖裡就有重複的 id；但沒有任何 `url(#…)`、`href="#…"` 參照這些 id（箭頭直接畫成 `path`，沒用 `marker`）；`idPrefix` 選項對這些 id 沒有作用
+- 輸出沒有 `id` 屬性，節點名稱放在 `data-id`（flowchart、sequence、class、state、er、gantt、pie、gitGraph、mindmap 都實測過），不會跟頁面上的 id 撞名
 - 同一份原文每次輸出都一樣
 - `pele/lazy` 入口約 1 kB gzip，每種圖表是各自的 chunk，用 `load(type)` 載入；`detectType`、`registered`、`render` 也從這個入口匯出
 
@@ -55,8 +55,8 @@ Mermaid.js 的 `render()` 是 async 而且要操作 DOM，會打破現在「同�
 ### 安全
 - DOMPurify 預設就允許 SVG 元素和 `style` 屬性，一般模式不用改設定；`FORBID_TAGS: ["style"]` 保留，Pele 本來就不輸出 `<style>`。簡報模式的 SVG 在 `foreignObject` 裡，也就是 HTML 整合點，裡面再放 inline SVG 是合法的 HTML
 - Pele 選項：`links: false`、`images: false`，不輸出連結，也不從分享連結讀外部圖片；設 `limit`（原文長度）、`outputLimit`、`maxEdges`，超過時當作錯誤顯示，數值在實作時參考 Pele 的預設值決定
-- 移除輸出裡所有 `id` 屬性（`svg.replace(/ id="[^"]*"/g, "")`）：沒有東西參照這些 id，而 id 直接用使用者寫的節點名稱，節點叫 `more-menu` 就會跟編輯器選單的 id 撞名。Pele 會把文字裡的 `"` 跳脫，這個 regex 不會誤刪標籤文字
-- 替代方案：用 `idPrefix` 讓每張圖的 id 不同。不採用：實測 `idPrefix` 對節點 id 沒有作用，而且 id 本來就沒被參照，不會衝突
+- Pele 輸出沒有 `id`，不用另外處理；測試檢查輸出沒有 `id`，升版後開始輸出 id（節點叫 `more-menu` 就會跟編輯器選單撞名）會被擋下來
+- 例外：寫了 `accTitle` / `accDescr` 會輸出 `id="<idPrefix>-title"`、`-desc`。`idPrefix` 用 `pele-` 加原文的 hash，同頁多張圖不撞名；不用遞增計數器，因為 `idPrefix` 也是部分圖表手繪線條的亂數種子，每次換圖會跟著打字抖動
 
 ### 顏色與字型
 `--pele-*` 變數設在預覽容器上，配合預覽現在的灰階和文字顏色；背景透明。簡報裡設 `--pele-fg`、`--pele-line` 為 `currentColor`，跟著 Marp 主題和 `invert` 頁變色。`fontFamily` 傳預覽用的字型，讓 Pele 用同一個字型量字寬。
@@ -79,4 +79,7 @@ Mermaid.js 的 `render()` 是 async 而且要操作 DOM，會打破現在「同�
 
 ## Open Questions
 
-- `limit`、`outputLimit`、`maxEdges` 的具體數值：看 Pele 預設值，再拿一張大圖實測
+- ~~`limit`、`outputLimit`、`maxEdges` 的具體數值~~ → 已決定：`limit: 20000`、`maxEdges: 1000`、`outputLimit: 1000000`
+  - Pele 1.8.0 預設：`limit` 50000 字元、`outputLimit` 4000000；`maxEdges` 實測到 3500 條還沒擋
+  - 實測（Node）：預設上限內最差的圖（3500 條邊的鏈）85 ms、輸出 1.6 MB；1000 條邊的密集圖約 80 ms、300 kB
+  - 一般手寫的圖原文不到 2 kB、邊不到 100 條，收緊到 1/2～1/4 不影響正常使用，又把單張圖壓在 100 ms、1 MB 以內

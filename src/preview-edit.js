@@ -1,5 +1,6 @@
 // 在預覽直接編輯：記下表格、checkbox 在原文的位置，改完寫回 Markdown
 import { marked } from "marked";
+import { renderDiagram } from "./diagram.js";
 
 // 頂層 token 的 raw 串起來就是原文，累加長度就是表格的起點
 // 引用、清單裡的表格不記，點了也不能編輯
@@ -16,6 +17,11 @@ export const previewRenderer = new marked.Renderer();
 previewRenderer.table = function (token) {
   const html = marked.Renderer.prototype.table.call(this, token);
   return token.start === undefined ? html : html.replace("<table>", `<table data-start="${token.start}">`);
+};
+
+// ```mermaid 畫成圖，其他語言照原本的程式碼區塊
+previewRenderer.code = function (token) {
+  return token.lang === "mermaid" ? renderDiagram(token.text) : marked.Renderer.prototype.code.call(this, token);
 };
 
 // 清單的 checkbox：每個頂層區塊裡，原文的 [ ] 跟 checkbox token 依序一一對應

@@ -1,5 +1,8 @@
-## ADDED Requirements
+# mermaid-diagrams Specification
 
+## Purpose
+預覽和簡報裡的 ` ```mermaid ` 區塊畫成圖，原文不變。
+## Requirements
 ### Requirement: mermaid 程式碼區塊在預覽時顯示成圖
 語言標成 `mermaid` 的程式碼區塊（` ```mermaid `），系統 SHALL 在一般模式預覽中顯示成 SVG 圖，原始 Markdown 內容 SHALL 保持不變。
 
@@ -73,7 +76,7 @@ mermaid 區塊有語法錯誤、圖表類型不支援，或超過大小限制時
 
 #### Scenario: 標籤裡的 HTML
 - **WHEN** 節點標籤是 `<img src=x onerror=alert(1)>`
-- **THEN** 標籤以文字顯示，不執行任何程式
+- **THEN** 不執行任何程式，輸出裡沒有 `<img>` 和事件屬性（Pele 會把標籤裡的 HTML 拿掉）
 
 #### Scenario: click 指令
 - **WHEN** mermaid 原文包含 `click A "javascript:alert(1)"` 或指向一般網址的 click
@@ -86,3 +89,4 @@ mermaid 區塊有語法錯誤、圖表類型不支援，或超過大小限制時
 #### Scenario: 同一頁有多張圖
 - **WHEN** 預覽中有多張圖，或編輯預覽和唯讀預覽同時開著
 - **THEN** 每張圖的箭頭等圖形正確顯示，不會互相影響
+

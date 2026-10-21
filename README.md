@@ -37,6 +37,23 @@
 - 想顯示 `=` 開頭的文字，寫成 `\=`
 - 簡報裡的表格不會計算
 
+### 圖表
+
+語言標成 `mermaid` 的程式碼區塊，預覽會畫成圖；原文、存檔和分享連結裡還是 mermaid 語法，在 GitHub、Obsidian 也看得到同一張圖。
+
+````markdown
+```mermaid
+flowchart LR
+  登入 --> 驗證 --> 首頁
+```
+````
+
+- 流程圖、時序圖、圓餅圖、長條／折線圖（`xychart-beta`）等，支援的類型見 [Pele](https://pele.run)
+- 簡報裡也能用，圖會縮到投影片放得下，深色頁的圖會跟著變淺色
+- 語法錯誤時顯示原文和出錯的行號，其他內容照常顯示
+- 圖表引擎只有遇到 mermaid 區塊才載入，而且只載入用到的圖表類型
+- 不支援：`click` 連結、外部圖片；圖太大（原文超過 2 萬字、超過 1000 條連線）不會畫
+
 ### 檔案管理
 
 - 多檔案，可以建資料夾（一層），拖曳檔案就能換順序或搬到別的資料夾
@@ -83,7 +100,7 @@ pnpm lint
 node --test src/*.test.js
 ```
 
-技術：React 19、Vite、Tailwind CSS 4、marked、Marp（簡報）、DOMPurify、fflate（zip）、lucide-react（圖示）。
+技術：React 19、Vite、Tailwind CSS 4、marked、Marp（簡報）、Pele（mermaid 圖表）、DOMPurify、fflate（zip）、lucide-react（圖示）。
 
 主要檔案：
 
@@ -96,6 +113,7 @@ node --test src/*.test.js
 | `src/table-formula.js` | 表格公式的解析與計算 |
 | `src/preview-edit.js` | 在預覽編輯表格、勾選 checkbox，寫回原文 |
 | `src/slides.js` | 判斷是否為簡報、延遲載入 Marp、簡報範本 |
+| `src/diagram.js` | mermaid 圖表的按需載入與渲染 |
 
 ## 靈感來源
 

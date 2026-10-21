@@ -52,6 +52,7 @@ import {
 } from "./preview-edit";
 import { TableTools } from "./table-tools";
 import { isSlides, loadMarp, stripImports, SLIDES_TEMPLATE } from "./slides";
+import { loadDiagrams, takePending } from "./diagram";
 
 const REPO_URL = "https://github.com/skynocover/markdown-editor-online";
 
@@ -111,11 +112,14 @@ const renderSlides = (marp, markdown) => {
 };
 
 // 簡報引擎還沒載入前先顯示空白，載入後 setMarp 觸發重新 render
-const render = (marp, markdown) => {
+const renderDoc = (marp, markdown) => {
   if (!isSlides(markdown)) return { html: parseMarkdown(markdown) };
   if (!marp) return { slides: true, html: "", css: "" };
   return renderSlides(marp, markdown);
 };
+
+// diagrams：還沒載入圖表引擎的 mermaid 原文，編輯器載好後遞增 diagramVersion 重新 render
+const render = (marp, markdown) => ({ ...renderDoc(marp, markdown), diagrams: takePending() });
 
 // 字數以字素計：👍🏽、👨‍👩‍👧 這類組合 emoji 也只算一個字
 const graphemes = new Intl.Segmenter();
@@ -332,12 +336,31 @@ const MarkdownEditor = () => {
   const currentFile = files.find((f) => f.id === currentFileId);
   const currentContent = currentFile?.content || "";
   // useMemo：Marp 一次要十幾 ms，別讓打分享密碼、開選單這類無關的 state 變動也重排
-  const current = useMemo(() => render(marp, currentContent), [currentContent, marp]);
+  // diagramVersion：圖表引擎載好了，同樣的原文要重新 render 才會變成圖
+  const [diagramVersion, setDiagramVersion] = useState(0);
+  const current = useMemo(
+    () => render(marp, currentContent),
+    [currentContent, marp, diagramVersion], // eslint-disable-line react-hooks/exhaustive-deps -- 只用來觸發重算
+  );
   const viewContent = viewDoc?.content;
   const view = useMemo(
     () => (viewContent == null ? null : render(marp, viewContent)),
-    [viewContent, marp],
+    [viewContent, marp, diagramVersion], // eslint-disable-line react-hooks/exhaustive-deps -- 只用來觸發重算
   );
+
+  // 失敗不提示：區塊繼續顯示原文，下次 render 又會記進待載入，再試一次
+  // 重畫會換掉預覽的 HTML，正在編輯的格子先存檔收起，不然打的字跟著被換掉
+  useEffect(() => {
+    const sources = [...current.diagrams, ...(view?.diagrams ?? [])];
+    if (sources.length)
+      loadDiagrams(sources).then(
+        () => {
+          finishCellEdit(true);
+          setDiagramVersion((v) => v + 1);
+        },
+        () => {},
+      );
+  }, [current.diagrams, view?.diagrams]); // eslint-disable-line react-hooks/exhaustive-deps -- 編輯中的格子記在 ref 裡，拿舊的 finishCellEdit 也收得到
 
   const needMarp = current.slides || !!view?.slides;
   useEffect(() => {
@@ -1523,6 +1546,34 @@ const MarkdownEditor = () => {
           outline: 2px solid #3b82f6;
           outline-offset: -2px;
           background-color: #eff6ff;
+        }
+        /* mermaid 圖：Pele 的顏色都是 --pele-* 變數，配合預覽的灰階；背景透明 */
+        .prose .diagram,
+        .marpit .diagram {
+          --pele-bg: transparent;
+          --pele-fg: currentColor;
+          --pele-line: currentColor;
+        }
+        .prose .diagram {
+          --pele-surface: #f4f4f4;
+          --pele-border: #ddd;
+          margin-bottom: 1em;
+        }
+        .diagram-error {
+          color: #dc2626;
+          font-size: 0.875em;
+        }
+        /* 簡報：文字、線條、填色都從投影片的文字顏色調出來，跟著主題和深色頁變（這裡別寫 Marp 深色頁的 class 名稱，Tailwind 會產生同名 utility）
+           投影片固定 1280×720，扣掉上下內距和標題約剩 480px；SVG 有 viewBox，限高後內容等比例縮小 */
+        .marpit .diagram {
+          --pele-muted: color-mix(in srgb, currentColor 60%, transparent);
+          --pele-surface: color-mix(in srgb, currentColor 8%, transparent);
+          --pele-surface-alt: color-mix(in srgb, currentColor 15%, transparent);
+          --pele-border: color-mix(in srgb, currentColor 40%, transparent);
+        }
+        .marpit .diagram svg {
+          max-height: 480px;
+          margin: 0 auto;
         }
         .slides svg[data-marpit-svg] {
           display: block;

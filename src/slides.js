@@ -1,3 +1,5 @@
+import { renderDiagram } from "./diagram.js";
+
 // 簡報模式：檔頭 front matter 有 `marp: true` 時，用 Marp 把 --- 分隔的內容排成投影片
 const FRONT_MATTER = /^---\r?\n([\s\S]*?)\r?\n---(\r?\n|$)/;
 
@@ -18,7 +20,16 @@ export const loadMarp = () =>
   ]).then(
     ([{ Marp }, { browser }]) => {
       browser();
-      return new Marp({ script: false });
+      const marp = new Marp({ script: false });
+      // ```mermaid 畫成圖：fence 規則直接回傳 HTML，不經過 Marp 的 HTML 白名單（html_block 裡的 <svg> 會被跳脫）
+      // 投影片 1280px 寬、內文約 29px（default 主題），用預設 16px 畫圖會小到看不清楚
+      const { rules } = marp.markdown.renderer;
+      const fence = rules.fence;
+      rules.fence = (tokens, idx, ...rest) =>
+        tokens[idx].info.trim() === "mermaid"
+          ? renderDiagram(tokens[idx].content, { fontSize: 28 })
+          : fence(tokens, idx, ...rest);
+      return marp;
     },
     (e) => {
       marpPromise = null; // 失敗不要快取，下次再試
