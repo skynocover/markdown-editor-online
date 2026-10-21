@@ -23,8 +23,11 @@ Marp 的背景圖寫成 `![bg 關鍵字...](網址)`，關鍵字之間用空白�
 ## Decisions
 
 ### 解析成「認得的部分 + 原樣保留的部分」
-`readBackground(markdown, range)` 在這頁範圍內找第一個 `![bg ...](...)`（跳過程式碼區塊），把方括號裡的字逐一分類：
-- 認得的字轉成欄位：`side`（`left`、`right` 或空）、`width`、`fit`（`cover`、`contain`；`fit` 視為 `contain`）、`brightness`、`blur`、`grayscale`
+`readBackground(tokens, markdown, range)` 用 `slideRanges` 同一次 `marp.markdown.parse` 的結果，找這頁範圍內 alt 以 `bg` 開頭的 image token，算出背景圖的數量和第一張所在的行，再到那一行用正規表示式找出 `![bg ...](...)`。
+- 不直接對原文用正規表示式：程式碼區塊和行內程式碼裡的 `![bg]` 都會被誤判，範本第 3 頁就有一個寫在行內程式碼裡的示範
+
+把方括號裡的字逐一分類：
+- 認得的字轉成欄位：`side`（`left`、`right` 或空）、`width`（只寫 `left`、`right` 沒帶比例時是 Marp 預設的 50%）、`fit`（`cover`、`contain`；`fit` 視為 `contain`）、`brightness`、`blur`、`grayscale`
 - 其他字依原本的順序放進 `rest`
 
 `writeBackground` 組回 `bg` + 欄位 + `rest`，並且只輸出跟預設值不同的欄位，例如 `brightness` 是 1、`blur` 是 0 時不寫。找不到 `![bg` 時回傳 null，工具列顯示成「新增」。
@@ -35,7 +38,7 @@ Marp 的背景圖寫成 `![bg 關鍵字...](網址)`，關鍵字之間用空白�
 - 代價：拖動時預覽不會即時更新，放開才看到結果
 
 ### 新增時的預設值
-預設用 `![bg right:40%](網址)`，也就是範本裡示範的左文右圖。插在這頁開頭的設定註解後面。網址裡的空白和括號要編碼，避免 Markdown 的圖片語法斷掉。
+預設用 `![bg right:40%](網址)`，也就是範本裡示範的左文右圖。插在這頁開頭的設定註解後面。網址裡的空白和括號要編碼（`%20`、`%28`、`%29`），避免 Markdown 的圖片語法斷掉。只換這三種字元，不用 `encodeURI`：網址裡已經有的 `%20` 會被重複編碼成 `%2520`。
 
 ### 移除背景圖
 刪掉那個圖片語法所在的整行；如果那一行還有其他文字，就只刪圖片語法本身。

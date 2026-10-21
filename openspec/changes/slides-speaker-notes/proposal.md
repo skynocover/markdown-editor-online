@@ -23,7 +23,7 @@
 
 ## Impact
 
-- `src/markdown-editor.jsx`：`renderSlides` 多回傳 `comments`；預覽顯示備註；`Presenter` 的目前頁數改成由外層管理，讓講者視窗共用
+- `src/markdown-editor.jsx`：`renderSlides` 多回傳 `comments`；預覽顯示備註（`Preview` 加 `editable` prop，`slides-preview-edit` 也用它）；`Presenter` 的目前頁數改成由外層管理，讓講者視窗共用
 - 新增 `src/speaker-view.jsx`：講者視窗的內容
 - 備註是 Markdown 原文的一部分，用分享連結分享時對方看得到原文，備註也會看到；README 要說明這一點
 - 跟 `slides-preview-edit`、`slides-background` 沒有依賴關係，可以分開做

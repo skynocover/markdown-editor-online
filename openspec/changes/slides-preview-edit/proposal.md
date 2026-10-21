@@ -5,7 +5,7 @@
 ## What Changes
 
 - 簡報模式的預覽上方加一列整份簡報的設定：主題（default、gaia、uncover）、比例（16:9、4:3）、頁碼開關、頁尾文字
-- 滑鼠移到投影片上時，下方出現單頁工具列：
+- 滑鼠移到投影片上時，投影片右上角出現單頁工具列（下方留給 `slides-speaker-notes` 的備註）：
   - 「置中」、「深色」兩個開關，分別寫入 `_class: lead`、`_class: invert`，兩個可以同時開
   - 「隱藏頁碼」開關，寫入 `_paginate: false`
   - 新增（插在這頁後面）、複製、刪除、上移、下移
@@ -25,6 +25,6 @@
 
 - `src/slides.js`：新增純函式，包括用 Marp 解析器找出每頁在原文的行範圍、讀寫整份設定、讀寫單頁設定，以及搬移投影片；同時新增測試 `src/slides.test.js`
 - 新增 `src/slide-tools.jsx`：整份設定列和單頁工具列，疊在預覽上的做法跟 `TableTools` 一樣
-- `src/markdown-editor.jsx`：簡報模式的預覽接上工具，寫回原文共用 `replaceText`
+- `src/markdown-editor.jsx`：簡報模式的預覽接上工具，寫回原文共用 `replaceText`；`Preview` 改用 `editable` prop 分辨能不能編輯（`slides-speaker-notes` 也用它）
 - 不新增套件，存檔格式、分享連結和 zip 匯出都不變
 - 之後的 `slides-background` 會用到這裡的分頁定位和單頁工具列

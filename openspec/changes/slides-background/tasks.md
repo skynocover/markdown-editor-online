@@ -1,9 +1,9 @@
 ## 1. 解析與改寫（`src/slides.js`）
 
-- [ ] 1.1 `readBackground(markdown, range)`：找出這頁第一個 `![bg]`（跳過程式碼區塊），拆成欄位和 `rest`，並回傳背景圖的數量
+- [ ] 1.1 `readBackground(tokens, markdown, range)`：用 Marp 解析結果的 image token 找出這頁的背景圖數量和第一張所在的行，再拆成欄位和 `rest`；只寫 `left`、`right` 時寬度是 50%
 - [ ] 1.2 `writeBackground(bg)`：只輸出跟預設值不同的欄位，`rest` 依原本順序接在後面
-- [ ] 1.3 `addBackground`、`removeBackground`，包括網址編碼和刪整行或只刪語法的判斷
-- [ ] 1.4 測試：保留不認得的字、`fit` 視為 `contain`、預設值不輸出、多張背景圖、網址編碼
+- [ ] 1.3 `addBackground`、`removeBackground`，包括網址編碼（只換空白和括號）和刪整行或只刪語法的判斷
+- [ ] 1.4 測試：保留不認得的字、`fit` 視為 `contain`、預設值不輸出、多張背景圖、網址編碼和已編碼的網址、行內程式碼裡的 `![bg]` 不算、`left` 沒帶比例是 50%
 
 ## 2. 介面
 
