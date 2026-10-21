@@ -1,6 +1,8 @@
 @import "tailwindcss";
 /* 簡報範本裡的 invert、lead 是 Marp 的 class，別讓 Tailwind 產生同名 utility 套到投影片上 */
 @source not "./slides.js";
+/* 投影片工具的按鈕也要寫 invert：直接禁止產生 Tailwind 的 invert（filter: invert），不管寫在哪個檔案 */
+@source not inline("invert");
 
 /* Tailwind 的 preflight 清掉了清單符號、標題粗細、行內圖片：投影片裡還原成瀏覽器預設，Marp 主題有設的照樣蓋過
    放這裡不放在元件的 <style>：講者視窗只複製 <head> 的樣式表 */

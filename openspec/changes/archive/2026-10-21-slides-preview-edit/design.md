@@ -29,29 +29,31 @@
 - 不自己用 `---` 切：會被程式碼區塊和 `headingDivider` 搞錯
 - 第 N 頁就是第 N 個 `svg[data-marpit-svg]`，跟 `Presenter` 數頁數的方式一樣
 
-### 整份設定：`theme`、`size` 改最後一次出現的位置，`paginate`、`footer` 只改 front matter
-設定列的四個 key 在 Marp 裡分成兩種（已驗證）：
+### 整份設定：`theme`、`size` 改最後一次出現的位置，`paginate`、`header`、`footer` 只改 front matter
+設定面板的五個 key 在 Marp 裡分成兩種（已驗證）：
 - `theme`、`size` 是整份共用的設定：可以寫在 front matter，也可以寫在任何一頁的 `<!-- theme: x -->`，後面出現的會蓋過前面的，整份只有一個值
-- `paginate`、`footer` 是從這頁往後延續的設定：寫在第 3 頁的 `<!-- paginate: false -->` 只影響第 3 頁以後，第 1、2 頁還是 front matter 的值
+- `paginate`、`header`、`footer` 是從這頁往後延續的設定：寫在第 3 頁的 `<!-- paginate: false -->` 只影響第 3 頁以後，第 1、2 頁還是 front matter 的值
 
 `setGlobal(markdown, key, value)` 的規則：
 1. `theme`、`size` 有寫在註解裡的話，改最後一個註解（只認一個註解只寫這一個 key 的情況）
-2. 否則改 front matter 裡那一行；`paginate`、`footer` 一律只走這一步，不改任何註解
+2. 否則改 front matter 裡那一行；`paginate`、`header`、`footer` 一律只走這一步，不改任何註解
 3. 都沒有的話，加在 front matter 的最後一行
-4. 值是空的（例如清空頁尾）就刪掉那一行
+4. 值是空的（例如清空頁首、頁尾）就刪掉那一行
 
-設定列的初始狀態：`theme`、`size` 用最後一頁實際套用的值（`marpitDirectives`）；`paginate`、`footer` 讀 front matter 那一行，沒寫就是未開啟、空白。
-- 不用「實際套用的值」顯示 `paginate`、`footer`：每頁可能不同，設定列不知道該顯示哪一頁
-- 改 `paginate`、`footer` 也不去改中途的 `<!-- paginate: false -->` 註解：那是使用者刻意從某頁開始改的，設定列只管開頭的預設值
+設定面板的初始狀態：`theme`、`size` 用最後一頁實際套用的值（`marpitDirectives`）；`paginate`、`header`、`footer` 讀 front matter 那一行，沒寫就是未開啟、空白。
+- 不用「實際套用的值」顯示 `paginate`、`header`、`footer`：每頁可能不同，設定面板不知道該顯示哪一頁
+- 改 `paginate`、`header`、`footer` 也不去改中途的 `<!-- paginate: false -->` 註解：那是使用者刻意從某頁開始改的，設定面板只管開頭的預設值
 
 - 只改那一行，不重新產生整個 front matter：保留使用者的註解和排列順序
-- 不引入 YAML 套件：這四個 key 都是單行的純量
+- 不引入 YAML 套件：這五個 key 都是單行的純量
 - 值有 YAML 特殊字元時（`:`、`#`、開頭是 `-`、`[`、`{`、引號等）用 `JSON.stringify` 包起來，JSON 字串本身就是合法的 YAML；不然 `footer: 公司: 研發部` 會讓 Marp 解析失敗
 
 ### 單頁設定：只寫只影響當頁的 `_` 版本
 `setSpot(markdown, range, key, value)` 在這頁找 `<!-- _key: ... -->`，有就改，沒有就插在這頁開頭（分隔線下一行；第 1 頁插在 front matter 後面），傳入 `null` 就刪掉那一行。
 - 不寫沒有底線的 `class:`：它會延續套用到後面每一頁，按了以後後面的投影片也跟著變，使用者會很困惑
 - 「置中」、「深色」是兩個開關，在 class 裡加入或移除 `lead`、`invert`，其他 class 原樣保留
+- 只有 gaia 主題有 `lead` 的樣式（已驗證 default、uncover 的 CSS 沒有 `.lead`；uncover 本來就全部置中），其他主題「置中」變灰並提示；這頁已經有 `lead` 時照樣可以關掉
+- Tailwind 掃到程式碼裡的 `invert` 會產生 `filter: invert` 的同名樣式，把深色頁的顏色反轉；`index.css` 用 `@source not inline("invert")` 禁止產生
 - 這頁的狀態從 `marpitDirectives.class` 讀，它已經是這頁實際套用的值（延續下來的 `class:` 或這頁的 `_class:`）
 - 新的值要從實際套用的 class 增減，不能只看這頁的 `_class` 那一行：有寫 `_class` 的頁面，延續下來的 `class` 會整個被蓋掉。例如延續 `class: invert` 的頁面按「置中」，要寫 `_class: invert lead`，只寫 `lead` 深色就不見了
 - 寫入規則：新的值跟「這頁不寫 `_class` 時會套用的值」（也就是延續下來的 `class`）相同，就刪掉 `_class` 那一行；不同就寫入。空值寫成 `<!-- _class: "" -->`，用來蓋掉延續下來的 class（已驗證 Marp 會解析成空字串）
@@ -60,11 +62,16 @@
 ### 投影片操作只搬移原文片段
 - 新增：在這頁結尾插入 `\n---\n\n`
 - 複製：把這頁的原文（含分隔線）插在下一頁前面；第 1 頁要另外補一條分隔線
-- 刪除：刪掉這頁的範圍；刪第 1 頁時改成刪掉第 1 頁的內容和第 2 頁的分隔線，front matter 保留。只剩一頁時不能刪
+- 刪除：刪掉這頁的範圍；刪第 1 頁時改成刪掉第 1 頁的內容和第 2 頁的分隔線，front matter 保留。只剩一頁時不能刪。這頁的 `<!-- theme -->`、`<!-- size -->` 註解留下來（整份共用，刪了整份簡報會變）；延續的 `class`、`paginate` 是這頁寫的內容，一起刪
+- 寫在多行註解裡的設定找不到那一行：寫完重新解析，沒生效就不改原文，不留一行沒作用的設定
 - 有設定 `headingDivider` 時隱藏這些操作：那種簡報的分頁沒有分隔線，改寫原文的結果難以預測。版型和頁碼的開關照樣可以用
 
-### 工具疊在預覽上
-跟 `TableTools` 一樣，量 svg 的位置後把工具列疊在投影片右上角，不動預覽的 HTML。投影片下方留給 `slides-speaker-notes` 的備註，兩個功能都做完時才不會互相蓋住。整份設定列放在預覽最上方。每次修改都經過 `replaceText`，所以可以用 Ctrl+Z 還原。
+### 整份設定放在工具列的面板，單頁工具疊在預覽上
+整份設定是做簡報時設一次就不太動的東西，不常駐在預覽上方佔空間；跟播放、講者模式放在一起，整份簡報的操作集中在同一個地方。主題用小卡片顯示底色和字型，不用點就看得出風格；卡片下方一句話說明滑鼠所在（沒有就是目前）的主題適合什麼簡報。頁首、頁尾跟其他設定一樣排成一行；按 Enter 或離開輸入框就寫入，點外面、按 Esc 關掉面板也會離開輸入框，所以不另外提示「按 Enter 套用」。
+
+停用的按鈕（非 gaia 主題的「置中」、只剩一頁的「刪除」）滑鼠移上去要說明原因。不用原生 `title`：要停一秒以上才出現。改用工具列已有的 `Tip`（搬到 `src/tip.jsx` 共用），停用時只把字變灰，不用 opacity，不然提示也跟著變淡。
+
+跟 `TableTools` 一樣，量 svg 的位置後把工具列疊在投影片右上角，不動預覽的 HTML。投影片下方留給 `slides-speaker-notes` 的備註，兩個功能都做完時才不會互相蓋住。整份設定放在頂端工具列的「簡報設定」面板（原生 popover），跟播放、講者模式連成一組，只在簡報時出現，後面用直線跟通用按鈕隔開。每次修改都經過 `replaceText`，所以可以用 Ctrl+Z 還原。
 
 `Preview` 目前用有沒有傳 `tableEvents` 分辨唯讀，簡報分支沒用到它。改成明確的 `editable` prop，簡報工具和講者備註都看它決定要不要顯示。
 

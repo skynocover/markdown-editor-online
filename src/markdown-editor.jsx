@@ -53,7 +53,9 @@ import {
   canPickRef,
 } from "./preview-edit";
 import { TableTools } from "./table-tools";
+import { Tip } from "./tip";
 import { SpeakerView } from "./speaker-view";
+import { SlideSettings, SlideTools } from "./slide-tools";
 import { isSlides, loadMarp, stripImports, SLIDES_TEMPLATE } from "./slides";
 
 const REPO_URL = "https://github.com/skynocover/markdown-editor-online";
@@ -112,13 +114,14 @@ const renderSlides = (marp, markdown) => {
     }),
     css: stripImports(css),
     notes: comments.map((page) => page.join("\n\n")),
+    global: { ...marp.lastGlobalDirectives }, // 整份的設定（theme、size），簡報設定列用
   };
 };
 
 // 簡報引擎還沒載入前先顯示空白，載入後 setMarp 觸發重新 render
 const render = (marp, markdown) => {
   if (!isSlides(markdown)) return { html: parseMarkdown(markdown) };
-  if (!marp) return { slides: true, html: "", css: "", notes: [] };
+  if (!marp) return { slides: true, html: "", css: "", notes: [], global: {} };
   return renderSlides(marp, markdown);
 };
 
@@ -739,6 +742,25 @@ const MarkdownEditor = () => {
     }
   };
 
+  // 簡報工具回傳整份新原文：只換掉前後相同以外的那一段，游標和復原紀錄才不會整份重來
+  const replaceContent = (next) => {
+    if (next === currentContent) return;
+    let start = 0;
+    while (start < next.length && next[start] === currentContent[start]) start++;
+    let end = 0;
+    while (
+      end < next.length - start &&
+      end < currentContent.length - start &&
+      next[next.length - 1 - end] === currentContent[currentContent.length - 1 - end]
+    )
+      end++;
+    // 不要停在 emoji 的兩半中間（例如 🎉 換成 🎊，前半碼一樣）
+    const low = (str, i) => /[\uDC00-\uDFFF]/.test(str[i] ?? "");
+    if (low(next, start) || low(currentContent, start)) start--;
+    if (end && low(next, next.length - end)) end--;
+    replaceText(start, currentContent.length - end, next.slice(start, next.length - end));
+  };
+
   const exportFile = () => {
     if (!currentFile) return;
     const blob = new Blob([currentFile.content], { type: "text/markdown" });
@@ -1121,17 +1143,25 @@ const MarkdownEditor = () => {
             </h1>
           </div>
           <div className="flex items-center gap-2 shrink-0">
+            {/* 簡報專用的按鈕連成一組，跟後面的通用按鈕用直線隔開；一般文件不顯示 */}
             {current.slides && marp && (
               <>
-                <PlayButton onClick={() => startPresenting(current)} />
-                <button
-                  onClick={() => startSpeaker(current)}
-                  className="group/tip relative flex items-center px-3 py-1.5 text-sm text-gray-700 border border-gray-300 rounded hover:bg-gray-50"
-                >
-                  <Presentation size={16} className="mr-2" />
-                  講者模式
-                  <Tip text="另開講者視窗顯示備註、下一頁和時間；備註是原文的一部分，分享連結也看得到" />
-                </button>
+                <div className="flex divide-x divide-gray-300 rounded border border-gray-300">
+                  <PlayButton onClick={() => startPresenting(current)} className={GROUPED_BUTTON} />
+                  <button onClick={() => startSpeaker(current)} className={GROUPED_BUTTON}>
+                    <Presentation size={16} className="mr-2" />
+                    講者模式
+                    <Tip text="另開講者視窗顯示備註、下一頁和時間；備註是原文的一部分，分享連結也看得到" />
+                  </button>
+                  <SlideSettings
+                    marp={marp}
+                    markdown={currentContent}
+                    global={current.global}
+                    onChange={replaceContent}
+                    className={GROUPED_BUTTON}
+                  />
+                </div>
+                <span className="mx-1 h-6 border-l border-gray-300" />
               </>
             )}
             <button
@@ -1236,6 +1266,15 @@ const MarkdownEditor = () => {
                   },
                 }}
               />
+              {current.slides && marp && previewScroll && (
+                <SlideTools
+                  container={previewScroll}
+                  marp={marp}
+                  markdown={currentContent}
+                  html={current.html}
+                  onChange={replaceContent}
+                />
+              )}
               {activeTable !== null && previewScroll && (
                 <TableTools
                   container={previewScroll}
@@ -1600,22 +1639,6 @@ const MarkdownEditor = () => {
   );
 };
 
-// 滑鼠移上去或鍵盤聚焦時顯示的提示；父元素要有 group/tip relative
-// 只用 opacity 藏起來，螢幕閱讀器讀得到：純圖示按鈕不用再寫 aria-label
-// 原生 title 要停一秒以上才出現，而且觸控、鍵盤都看不到
-const TIP_ALIGN = {
-  left: "left-0",
-  right: "right-0",
-  center: "left-1/2 -translate-x-1/2",
-};
-const Tip = ({ text, align = "center" }) => (
-  <span
-    className={`pointer-events-none absolute top-full z-50 mt-1.5 whitespace-nowrap rounded bg-gray-900 px-2 py-1 text-xs font-normal text-white opacity-0 shadow transition-opacity delay-150 group-hover/tip:opacity-100 group-focus-visible/tip:opacity-100 group-has-[:focus-visible]/tip:opacity-100 ${TIP_ALIGN[align]}`}
-  >
-    {text}
-  </span>
-);
-
 // 預覽：一般文件用 prose 排版，簡報一張張往下疊
 // 唯讀預覽、播放畫面都在 DOM 後面，各自的 <style> 會蓋過底下編輯器預覽的主題
 // contain:paint 讓 inline style 的 position:fixed 只能待在預覽區內，蓋不到整個編輯器
@@ -1657,11 +1680,15 @@ const Preview = ({ doc, width, editable, tableEvents }) => {
   );
 };
 
-const PlayButton = ({ onClick }) => (
-  <button
-    onClick={onClick}
-    className="group/tip relative flex items-center px-3 py-1.5 text-sm text-gray-700 border border-gray-300 rounded hover:bg-gray-50"
-  >
+// 連成一組的按鈕：外框畫在外層，按鈕自己不畫
+const GROUPED_BUTTON =
+  "group/tip relative flex items-center px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-50 first:rounded-l last:rounded-r";
+
+const PlayButton = ({
+  onClick,
+  className = "group/tip relative flex items-center px-3 py-1.5 text-sm text-gray-700 border border-gray-300 rounded hover:bg-gray-50",
+}) => (
+  <button onClick={onClick} className={className}>
     <Play size={16} className="mr-2" />
     播放
     <Tip text="全螢幕播放簡報（← → 換頁，Esc 離開）" />
