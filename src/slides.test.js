@@ -16,6 +16,10 @@ import {
   addSlide,
   duplicateSlide,
   deleteSlide,
+  readBackground,
+  writeBackground,
+  addBackground,
+  removeBackground,
 } from "./slides.js";
 
 const marp = new Marp({ script: false });
@@ -253,4 +257,112 @@ test("隱藏頁碼：hold 算顯示，關掉時改成 false", () => {
 
 test("front matter 的值照原文讀，大小寫交給呼叫端", () => {
   assert.equal(readFrontMatter("---\nmarp: true\npaginate: True\n---\n", "paginate"), "True");
+});
+
+// 第 index 頁的背景圖
+const bgOf = (md, index = 0) => readBackground(md, slides(md)[index]);
+const editBg = (md, change) => writeBackground(md, { ...bgOf(md), ...change });
+
+test("背景圖：拆成欄位，不認得的字依原本順序保留", () => {
+  const bg = bgOf(`${FM}\n![bg contrast right:30% fit blur:5px sepia](a.jpg)\n# A`);
+  assert.deepEqual(
+    { side: bg.side, width: bg.width, fit: bg.fit, brightness: bg.brightness, tone: bg.tone, rest: bg.rest, url: bg.url, count: bg.count },
+    { side: "right", width: 30, fit: "contain", brightness: 1, tone: "sepia", rest: ["contrast", "blur:5px"], url: "a.jpg", count: 1 },
+  );
+});
+
+test("背景圖：改寬度時 sepia 保留在後面，預設值不輸出", () => {
+  const out = editBg(`${FM}\n![bg sepia right:30%](a.jpg)\n# A`, { width: 50 });
+  assert.match(out, /^!\[bg right:50% sepia\]\(a\.jpg\)$/m);
+  assert.match(editBg(`${FM}\n![bg brightness:0.5](a.jpg)`, { brightness: 1 }), /^!\[bg\]\(a\.jpg\)$/m);
+  assert.match(editBg(`${FM}\n![bg right:40%](a.jpg)`, { side: "left" }), /^!\[bg left:40%\]\(a\.jpg\)$/m);
+});
+
+test("背景圖：left 沒帶比例是 50%，brightness 沒帶數值是 1.5，寫兩次面板只認最後一個", () => {
+  assert.equal(bgOf(`${FM}\n![bg left](a.jpg)`).width, 50);
+  assert.equal(bgOf(`${FM}\n![bg brightness](a.jpg)`).brightness, 1.5);
+  assert.match(editBg(`${FM}\n![bg brightness](a.jpg)`, { brightness: 0.5 }), /^!\[bg brightness:0\.5\]\(a\.jpg\)$/m);
+  assert.match(editBg(`${FM}\n![bg brightness:0.3 brightness:0.8](a.jpg)`, { fit: "contain" }), /^!\[bg contain brightness:0\.8\]/m);
+});
+
+test("背景圖：行內程式碼裡的不算，多張只調第一張", () => {
+  assert.equal(bgOf(`${FM}\n# A \`![bg right:40%](圖片網址)\`\n`), null);
+  const md = `${FM}\n# A\n\n---\n\ntext\n![bg](a.jpg)\n![bg](b.jpg)\n`;
+  const bg = bgOf(md, 1);
+  assert.equal(bg.count, 2);
+  assert.equal(bg.url, "a.jpg");
+  assert.match(writeBackground(md, { ...bg, side: "left" }), /!\[bg left:50%\]\(a\.jpg\)\n!\[bg\]\(b\.jpg\)/);
+});
+
+test("背景圖：網址裡成對的括號、後面的 title 都照原樣保留", () => {
+  const paren = `${FM}\n![bg](https://e.org/Foo_(bar).jpg)`;
+  assert.equal(bgOf(paren).url, "https://e.org/Foo_(bar).jpg");
+  assert.match(editBg(paren, { side: "left" }), /^!\[bg left:50%\]\(https:\/\/e\.org\/Foo_%28bar%29\.jpg\)$/m);
+  assert.equal(removeBackground(paren, bgOf(paren)), `${FM}`);
+  const title = `${FM}\n![bg](a.jpg "標題")`;
+  assert.equal(bgOf(title).url, "a.jpg");
+  assert.match(editBg(title, { side: "left" }), /^!\[bg left:50%\]\(a\.jpg "標題"\)$/m);
+});
+
+test("背景圖：多張時位置以最後一張寫了 left、right 的為準，寫回只寫在第一張", () => {
+  const md = `${FM}\n![bg](a.jpg)\n![bg right:40% blur](b.jpg)`;
+  assert.deepEqual([bgOf(md).side, bgOf(md).width], ["right", 40]);
+  assert.match(editBg(md, { side: "left" }), /^!\[bg left:40%\]\(a\.jpg\)\n!\[bg blur\]\(b\.jpg\)$/m);
+  const oneLine = `${FM}\n![bg](a.jpg) ![bg left](b.jpg)`;
+  assert.match(editBg(oneLine, { side: "" }), /^!\[bg\]\(a\.jpg\) !\[bg\]\(b\.jpg\)$/m);
+  const kept = `${FM}\n![bg left:30%](a.jpg) ![bg right](b.jpg)`; // Marp 輸出 split:30%
+  assert.deepEqual([bgOf(kept).side, bgOf(kept).width], ["right", 30]);
+});
+
+test("新增背景圖：插在設定註解後面，網址只編碼空白和括號", () => {
+  const md = `${FM}\n# A\n\n---\n\n<!-- _class: lead -->\n\n# B\n`;
+  const out = addBackground(md, slides(md)[1], "https://e.com/my photo (1).jpg");
+  assert.equal(out, `${FM}\n# A\n\n---\n\n<!-- _class: lead -->\n\n![bg right:40%](https://e.com/my%20photo%20%281%29.jpg)\n\n# B\n`);
+  assert.match(addBackground(`${FM}# A`, slides(`${FM}# A`)[0], "https://e.com/my%20photo.jpg"), /\(https:\/\/e\.com\/my%20photo\.jpg\)/);
+  assert.equal(bgOf(out, 1).side, "right");
+});
+
+test("移除背景圖：整行刪掉並收掉多的空行；同一行還有字就只刪語法", () => {
+  const md = `${FM}\n# A\n\n---\n\n<!-- _class: lead -->\n\n# B\n`;
+  const added = addBackground(md, slides(md)[1], "a.jpg");
+  assert.equal(removeBackground(added, bgOf(added, 1)), md);
+  const inline = `${FM}\n文字 ![bg](a.jpg) 後面\n`;
+  assert.equal(removeBackground(inline, bgOf(inline)), `${FM}\n文字  後面\n`);
+});
+
+test("背景圖：網址裡的 $ 照原樣寫回", () => {
+  assert.match(editBg(`${FM}\n![bg](a.jpg)`, { url: "https://e.com/$1.jpg" }), /\(https:\/\/e\.com\/\$1\.jpg\)/);
+});
+
+test("背景圖：透明度沒帶數值是 0.5，調回 1 就拿掉", () => {
+  assert.equal(bgOf(`${FM}\n![bg opacity](a.jpg)`).opacity, 0.5);
+  assert.equal(bgOf(`${FM}\n![bg opacity:30%](a.jpg)`).opacity, 0.3);
+  assert.match(editBg(`${FM}\n![bg opacity:0.3](a.jpg)`, { opacity: 1 }), /^!\[bg\]\(a\.jpg\)$/m);
+  assert.match(editBg(`${FM}\n![bg](a.jpg)`, { opacity: 0.6, brightness: 0.8 }), /^!\[bg brightness:0\.8 opacity:0\.6\]/m);
+});
+
+test("背景圖：色調只認完整的 grayscale、sepia，只套一半的留在 rest", () => {
+  assert.equal(bgOf(`${FM}\n![bg grayscale:100%](a.jpg)`).tone, "grayscale");
+  const half = bgOf(`${FM}\n![bg sepia:0.5](a.jpg)`);
+  assert.deepEqual([half.tone, half.rest], ["", ["sepia:0.5"]]);
+  const both = bgOf(`${FM}\n![bg grayscale sepia](a.jpg)`);
+  assert.deepEqual([both.tone, both.rest], ["grayscale", ["sepia"]]);
+  assert.match(editBg(`${FM}\n![bg grayscale](a.jpg)`, { tone: "sepia" }), /^!\[bg sepia\]/m);
+  assert.match(editBg(`${FM}\n![bg grayscale:1](a.jpg)`, { tone: "" }), /^!\[bg\]/m);
+});
+
+test("背景圖：auto 是填滿的一個值，選完整會換掉它", () => {
+  const md = `${FM}\n![bg auto](a.jpg)`;
+  assert.equal(bgOf(md).fit, "auto");
+  assert.deepEqual(bgOf(md).rest, []);
+  assert.equal(editBg(md, { fit: "contain" }).split("\n").pop(), "![bg contain](a.jpg)");
+  assert.equal(editBg(md, { fit: "cover" }).split("\n").pop(), "![bg](a.jpg)");
+});
+
+test("背景圖：Marp 認得但面板讀不懂的寫法，bgs 有值、readBackground 是 null", () => {
+  for (const body of ["![photo bg](a.jpg)", "![bg](<my pic.jpg>)", "x `a\nb` ![bg](a.jpg)"]) {
+    const md = `${FM}\n${body}`;
+    assert.equal(slides(md)[0].bgs.length, 1, body);
+    assert.equal(bgOf(md), null, body);
+  }
 });

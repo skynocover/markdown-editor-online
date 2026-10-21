@@ -1143,15 +1143,16 @@ const MarkdownEditor = () => {
             </h1>
           </div>
           <div className="flex items-center gap-2 shrink-0">
-            {/* 簡報專用的按鈕連成一組，跟後面的通用按鈕用直線隔開；一般文件不顯示 */}
+            {/* 簡報專用的按鈕連成一組，跟後面的通用按鈕用直線隔開；一般文件不顯示
+                窄螢幕（< lg）除了播放、分享都只留圖示，不然檔名會被擠到看不見；複製、匯出的圖示大家都認得，一直只留圖示 */}
             {current.slides && marp && (
               <>
                 <div className="flex divide-x divide-gray-300 rounded border border-gray-300">
                   <PlayButton onClick={() => startPresenting(current)} className={GROUPED_BUTTON} />
                   <button onClick={() => startSpeaker(current)} className={GROUPED_BUTTON}>
-                    <Presentation size={16} className="mr-2" />
-                    講者模式
-                    <Tip text="另開講者視窗顯示備註、下一頁和時間；備註是原文的一部分，分享連結也看得到" />
+                    <Presentation size={16} className="lg:mr-2" />
+                    <span className="hidden lg:inline">講者模式</span>
+                    <Tip text="講者模式：另開講者視窗顯示備註、下一頁和時間；備註是原文的一部分，分享連結也看得到" />
                   </button>
                   <SlideSettings
                     marp={marp}
@@ -1166,41 +1167,30 @@ const MarkdownEditor = () => {
             )}
             <button
               onClick={insertTable}
-              className="group/tip relative flex items-center px-3 py-1.5 text-sm text-gray-700 border border-gray-300 rounded hover:bg-gray-50"
+              className="group/tip relative flex items-center px-2 lg:px-3 py-1.5 text-sm text-gray-700 border border-gray-300 rounded hover:bg-gray-50"
               aria-label="插入表格"
             >
-              <Table size={16} className="mr-2" />
-              表格
+              <Table size={16} className="lg:mr-2" />
+              <span className="hidden lg:inline">表格</span>
               <Tip text="插入表格，在預覽點格子就能編輯" />
             </button>
             {/* 複製按鈕 */}
             <button
               onClick={copyContent}
-              className="group/tip relative flex items-center px-3 py-1.5 text-sm text-gray-700 border border-gray-300 rounded hover:bg-gray-50"
+              className="group/tip relative flex items-center px-2 py-1.5 text-sm text-gray-700 border border-gray-300 rounded hover:bg-gray-50"
               aria-label="複製 Markdown 原文"
             >
-              {copied ? (
-                <>
-                  <Check size={16} className="mr-2" />
-                  已複製
-                </>
-              ) : (
-                <>
-                  <Copy size={16} className="mr-2" />
-                  複製
-                </>
-              )}
-              <Tip text="複製 Markdown 原文" />
+              {copied ? <Check size={16} className="text-green-600" /> : <Copy size={16} />}
+              <Tip text={copied ? "已複製" : "複製 Markdown 原文"} />
             </button>
             {/* 匯出按鈕 */}
             <button
               onClick={exportFile}
-              className="group/tip relative flex items-center px-3 py-1.5 text-sm text-gray-700 border border-gray-300 rounded hover:bg-gray-50"
+              className="group/tip relative flex items-center px-2 py-1.5 text-sm text-gray-700 border border-gray-300 rounded hover:bg-gray-50"
               aria-label="下載目前檔案（.md）"
             >
-              <Download size={16} className="mr-2" />
-              匯出
-              <Tip text="下載目前檔案（.md）" />
+              <Download size={16} />
+              <Tip text="匯出：下載目前檔案（.md）" />
             </button>
             {/* 分享按鈕：打開分享設定 */}
             <button

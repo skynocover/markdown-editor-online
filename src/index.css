@@ -17,3 +17,28 @@
 .marpit mjx-container > svg {
   display: revert;
 }
+
+/* 背景圖面板：按住拉桿時其他都淡掉，只留那一條，看得到整張投影片的效果 */
+#slide-bg > * {
+  transition: opacity 0.15s;
+}
+#slide-bg:has(input[type="range"]:active) {
+  background: transparent;
+  border-color: transparent;
+  box-shadow: none;
+}
+#slide-bg:has(input[type="range"]:active) > :not(:has(input[type="range"]:active)) {
+  opacity: 0;
+}
+/* 留下的那一條墊白底，疊在照片上也看得清楚；用 outline 往外長，不會推動版面 */
+#slide-bg > :has(input[type="range"]:active) {
+  background: rgb(255 255 255 / 0.9);
+  border-radius: 6px;
+  outline: 6px solid rgb(255 255 255 / 0.9);
+}
+
+/* 打開面板的按鈕（簡報設定、背景圖）：面板打開時滑鼠還停在按鈕上，提示會壓在面板底下 */
+/* 限定有提示的按鈕（group/tip）：選單項目也有 popovertarget，最後一個 span 是選單文字 */
+body:has(:popover-open) [popovertarget].group\/tip > span:last-child {
+  display: none;
+}
