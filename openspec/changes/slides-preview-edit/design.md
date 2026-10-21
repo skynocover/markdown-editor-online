@@ -1,0 +1,58 @@
+## Context
+
+檔頭有 `marp: true` 時，`render` 用 Marp 把原文排成投影片：每頁是 `div.marpit` 底下的一個 `svg[data-marpit-svg]`，裡面的 `<section id="N">` 從 1 開始編號。結果經過 DOMPurify 過濾後放進預覽。Marp 等到第一次遇到簡報時才載入（`loadMarp`）。原文是唯一的資料來源。
+
+規劃時做了驗證：`marp.markdown.parse(md)` 產生的 `marpit_slide_open` token 帶有 `map`（原文行號），也帶有 `meta.marpitDirectives`（這頁實際套用的設定）。程式碼區塊裡的 `---` 不會被當成分頁，`***` 可以分頁。
+
+## Goals / Non-Goals
+
+**Goals:**
+- 不用學 Marp 語法，就能完成換主題、做封面頁、做深色頁、調整頁序
+- 每個控制項只對應一行看得懂的 Marp 語法
+- 找不到原文位置時不給操作，絕不寫錯位置
+
+**Non-Goals:**
+- 顏色調色盤（`backgroundColor`、`color`）：主題和深色頁已經涵蓋需求，真的需要可以自己手寫
+- 字體、字級、分欄：Marp 沒有這種設定，要寫 CSS 或 HTML
+- 在預覽直接改文字、拖拉元素位置：預覽元素對不回原文，Markdown 也沒有座標
+- 縮圖側欄、拖拉排序：先用上移、下移
+- 背景圖（在 `slides-background` 處理）、講者備註（在 `slides-speaker-notes` 處理）
+
+## Decisions
+
+### 用 Marp 自己的解析器找每頁的範圍
+`slideRanges(marp, markdown)` 呼叫 `marp.markdown.parse`，從每個 `marpit_slide_open` 的 `map[0]` 取得每頁的起始行，下一頁的起始行就是這頁的結尾，最後一頁到原文結尾。第 2 頁以後的第一行是分隔線（`---` 或 `***`），第 1 頁從 front matter 後面開始。同時記下 `meta.marpitDirectives`，工具列用它顯示目前的狀態。
+- 只在點擊或滑鼠移過去時才算，不在每次打字時算：解析一次要幾 ms，而且只有用到工具時才需要
+- 不自己用 `---` 切：會被程式碼區塊和 `headingDivider` 搞錯
+- 第 N 頁就是第 N 個 `svg[data-marpit-svg]`，跟 `Presenter` 數頁數的方式一樣
+
+### 整份設定：改最後一次出現的位置
+Marp 的整份設定可以寫在 front matter，也可以寫在任何一頁的 `<!-- theme: x -->`，後面出現的會蓋過前面的。`setGlobal(markdown, key, value)` 的規則：
+1. 有寫在註解裡的話，改最後一個註解（只認一個註解只寫這一個 key 的情況）
+2. 否則改 front matter 裡那一行
+3. 都沒有的話，加在 front matter 的最後一行
+4. 值是空的（例如清空頁尾）就刪掉那一行
+- 只改那一行，不重新產生整個 front matter：保留使用者的註解和排列順序
+- 不引入 YAML 套件：這四個 key 都是單行的純量
+
+### 單頁設定：只寫只影響當頁的 `_` 版本
+`setSpot(markdown, range, key, value)` 在這頁找 `<!-- _key: ... -->`，有就改，沒有就插在這頁開頭（分隔線下一行；第 1 頁插在 front matter 後面），值是空的就刪掉那一行。
+- 不寫沒有底線的 `class:`：它會延續套用到後面每一頁，按了以後後面的投影片也跟著變，使用者會很困惑
+- 「置中」、「深色」是兩個開關，在 `_class` 的值裡加入或移除 `lead`、`invert`，其他 class 原樣保留
+- 這頁的狀態從 `marpitDirectives` 讀；如果效果來自前面頁的 `class:`，開關照樣顯示開啟，關掉時寫入 `_class:` 覆蓋
+
+### 投影片操作只搬移原文片段
+- 新增：在這頁結尾插入 `\n---\n\n`
+- 複製：把這頁的原文（含分隔線）插在下一頁前面；第 1 頁要另外補一條分隔線
+- 刪除：刪掉這頁的範圍；刪第 1 頁時改成刪掉第 1 頁的內容和第 2 頁的分隔線，front matter 保留。只剩一頁時不能刪
+- 上移、下移：兩頁的內容（不含分隔線）互換，分隔線留在原位
+- 有設定 `headingDivider` 時隱藏這些操作：那種簡報的分頁沒有分隔線，搬移原文的結果難以預測。版型和頁碼的開關照樣可以用
+
+### 工具疊在預覽上
+跟 `TableTools` 一樣，量 svg 的位置後把工具列放在投影片下方，不動預覽的 HTML。整份設定列放在預覽最上方。每次修改都經過 `replaceText`，所以可以用 Ctrl+Z 還原。
+
+## Risks / Trade-offs
+
+- [原文裡有 Marp 解析不了的寫法，例如 front matter 格式錯誤] → 算不出範圍的話就隱藏工具列
+- [front matter 裡有多行值、引號或註解] → 只處理 `key: value` 單行格式；找不到那一行就加在最後面，不改寫其他行
+- [刪除投影片一次可能刪掉很多內容] → 可以用 Ctrl+Z 還原，不另外跳確認視窗
