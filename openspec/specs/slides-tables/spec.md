@@ -1,5 +1,8 @@
-## ADDED Requirements
+# slides-tables Specification
 
+## Purpose
+簡報模式（`marp: true`）裡的表格也計算公式，規則跟一般模式一樣；表格正上方有圖表註解時，投影片上只顯示圖。
+## Requirements
 ### Requirement: 簡報裡的表格計算公式
 簡報模式（front matter 有 `marp: true`）中，表格裡以 `=` 開頭的儲存格，系統 SHALL 用跟一般模式相同的規則計算並顯示結果，原始 Markdown SHALL 保持不變。
 
@@ -26,6 +29,14 @@
 - **WHEN** 一般文件的表格有圖表註解，使用者在檔頭加上 `marp: true`
 - **THEN** 一般模式原本是表格加圖，簡報裡變成只有圖
 
+#### Scenario: 註解和表格中間有空行
+- **WHEN** 簡報裡圖表註解和表格中間隔了一行空行
+- **THEN** 不畫圖，照常顯示表格（跟一般模式一樣）
+
+#### Scenario: 圖表註解不是講者備註
+- **WHEN** 簡報某一頁有圖表註解
+- **THEN** 這個註解不會出現在這一頁的講者備註裡
+
 #### Scenario: 圖表錯誤
 - **WHEN** 簡報裡的圖表註解範圍超出表格
 - **THEN** 投影片上顯示錯誤訊息，其他投影片正常
@@ -33,3 +44,4 @@
 #### Scenario: 不影響 Marp 指令
 - **WHEN** 同一頁同時有 `<!-- _class: invert -->` 和圖表註解
 - **THEN** 這一頁照常套用 `invert`，圖的顏色跟著變淺
+

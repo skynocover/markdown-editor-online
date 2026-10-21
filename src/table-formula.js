@@ -195,7 +195,7 @@ export const tableValues = (rows, budget = { left: 1e7 }) => {
   );
 };
 
-const isFormula = (s) => (s ?? "").trim().startsWith("=");
+export const isFormula = (s) => (s ?? "").trim().startsWith("=");
 export const display = (v) => (typeof v === "number" ? FORMAT.format(v) : v.code);
 
 // 回傳同樣形狀，公式格是顯示用的結果字串，其他格是 null

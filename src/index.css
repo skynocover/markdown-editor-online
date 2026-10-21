@@ -3,3 +3,5 @@
 @source not "./slides.js";
 /* openspec 文件也會寫到這些 class 名稱 */
 @source not "../openspec";
+/* 測試不是畫面，簡報測試也會寫到這些 class 名稱 */
+@source not "./**/*.test.js";

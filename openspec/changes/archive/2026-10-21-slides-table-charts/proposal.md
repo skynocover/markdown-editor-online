@@ -22,7 +22,7 @@
 ## Impact
 
 - `src/slides.js`：`loadMarp` 建好 Marp 後加一條 markdown-it core rule，找出表格、計算公式、處理圖表註解
-- 可能新增 `src/slides-table.js`（markdown-it token ↔ 表格資料）與測試
+- `src/slides.test.js`：用真的 Marp 實例測公式、圖表、註解不進講者備註
 - README：移除「簡報裡的表格不會計算」，補上簡報裡的圖表說明
 - 原本就在簡報表格裡寫 `=` 開頭文字的儲存格會開始被計算，要改成 `\=`
 - 存檔格式、分享連結不變

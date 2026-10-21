@@ -21,10 +21,13 @@
 ## Decisions
 
 ### 掛一條 markdown-it core rule
-`loadMarp` 建好 Marp 後，用 `marp.markdown.core.ruler.push` 加一條規則，在 block 解析完、渲染前處理 token：
+`loadMarp` 建好 Marp 後，用 `marp.markdown.core.ruler.before("marpit_collect", …)` 加一條規則。放在 `inline` 之後（格子已經解析成 children），`marpit_collect` 之前（拿掉的註解不會被收進 `comments`，也就是講者備註）：
 1. 掃出每一組 `table_open` … `table_close`，從 `inline` token 的 `content` 組出 `rows: string[][]`（表頭是第 1 列）
-2. `tableValues` / `evaluateTable` 計算，把公式格的 `inline` token 換成結果文字（`content` 和 `children` 一起換）
-3. 前一個 token 是 `marpit_comment` 而且 `parseChart` 認得 → 把整組表格 token 換成一個 `fence` token（`info` 是 `mermaid`，`content` 是 `chartSource(values, spec)` 的原文），交給 `mermaid-diagrams` 包好的 fence 規則畫圖；`chartSource` 丟出錯誤時換成自訂的 `table_chart_error` token，加一條 renderer rule 輸出跳脫過的錯誤訊息
+2. `tableValues` 計算，把公式格的 `inline` token 的 `children` 換成結果文字（跟一般模式一樣用 `display`）
+3. 前一個 token 是 `marpit_comment`、`parseChart` 認得，而且註解的結束行就是表格的開始行（`comment.map[1] === table.map[0]`）→ 把註解和整組表格 token 換成一個 `fence` token（`info` 是 `mermaid`，`content` 是 `chartSource(values, spec)` 的原文），交給 `mermaid-diagrams` 包好的 fence 規則畫圖；`chartSource` 丟出錯誤時換成自訂的 `table_chart_error` token，加一條 renderer rule 輸出跳脫過的錯誤訊息
+- 要比對行號：markdown-it 不會為空行產生 token，只看「前一個 token」的話，註解和表格中間隔空行也會被認成圖表，跟一般模式不一致
+- `parseChart` 吃原文那一行，不吃 `comment.content`：`content` 已經去掉 `<!-- -->`，多行註解、`<!--- --->`、註解後面有字都會被認成圖表，一般模式不認；引用、清單裡的表格也不畫（一般模式只看頂層）
+- 註解 token 要一起拿掉：實測 `<!-- chart bar B2 -->` 會出現在 `marp.render(md).comments`，之後的講者備註會顯示它
 - 公式預算 `budget` 整份簡報共用一個，跟一般模式一樣
 - 替代方案：換成 `html_block`，內容是 `renderDiagram(...)` 的 SVG。不採用：實測 Marp 的 HTML 白名單會把 `html_block` 裡的 `<svg>`、`<rect>` 跳脫成文字；換成 `fence` 則是沿用 mermaid 的渲染、載入中、錯誤顯示，不用另外處理
 - 替代方案：渲染成 HTML 之後再用 DOM 處理表格。不採用：原始的 `\=`、行內程式碼資訊已經不見了，而且一般模式也是在 token 層處理
@@ -34,7 +37,7 @@
 投影片空間有限，表格加圖通常放不下。有圖表註解的表格在簡報裡只顯示圖。這樣同一份文件在一般模式是「表格 + 圖」，切成簡報後自動變成「只有圖」，不用改註解。想讓觀眾看到數字，就在另一頁放一份沒有註解的表格。
 
 ### 跟一般模式共用的程式
-markdown-it token 轉成 `rows` 的部分放在新的 `src/slides-table.js`（純函式，可以用 Marp 實例跑測試）。`table-formula.js`、`table-chart.js`、`diagram.js` 都不改。
+規則寫在 `src/slides.js`，只有這裡用到，不另開檔案；測試直接用 Marp 實例跑。`table-formula.js` 只多匯出 `isFormula`，`table-chart.js`、`diagram.js` 都不改。
 
 ## Risks / Trade-offs
 
