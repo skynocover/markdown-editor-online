@@ -27,6 +27,9 @@ import {
   Presentation,
   Maximize,
   Table,
+  Columns2,
+  FoldHorizontal,
+  UnfoldHorizontal,
 } from "lucide-react";
 import { createPortal } from "react-dom";
 import { marked } from "marked";
@@ -221,6 +224,24 @@ const MarkdownEditor = () => {
   const [nextCell, setNextCell] = useState(null); // 存檔後要接著編輯的格子：{ start, r, c }
   const [activeTable, setActiveTable] = useState(null); // 顯示欄號、列號工具的表格（原文位置）
   const [previewScroll, setPreviewScroll] = useState(null); // 預覽的捲動區塊，工具疊在裡面
+  const [previewOnly, setPreviewOnly] = useState(false); // 投影給別人看：收起編輯區
+  // 寬版：表格多的文件才不會被擠成一字一行；記在瀏覽器，唯讀連結也共用
+  const [wide, setWide] = useState(() => {
+    try {
+      return localStorage.getItem(WIDE_KEY) === "1";
+    } catch {
+      return false;
+    }
+  });
+  const toggleWide = () => {
+    const next = !wide;
+    setWide(next);
+    try {
+      localStorage.setItem(WIDE_KEY, next ? "1" : "0");
+    } catch {
+      // 無痕模式等存不了就算了，只是下次不記得
+    }
+  };
 
   // 自動同步到 localStorage
   const quotaAlerted = useRef(false); // 空間不足只提醒一次，不要每打一個字就跳
@@ -570,7 +591,9 @@ const MarkdownEditor = () => {
 
   // 插入空白表格，接著在預覽打開第一格（表頭給字：整列空白的格子很小，不好點）
   const insertTable = () => {
-    const { selectionStart: start, selectionEnd: end, value } = editorRef.current;
+    const { selectionStart, selectionEnd, value } = editorRef.current;
+    // 只看預覽時游標看不到，可能停在勾選框或程式碼區塊裡：一律插在最後
+    const [start, end] = previewOnly ? [value.length, value.length] : [selectionStart, selectionEnd];
     const table = writeTable([["欄位 1", "欄位 2", "欄位 3"], ["", "", ""], ["", "", ""]]);
     const text = padTable(table, value.slice(0, start), value.slice(end));
     replaceText(start, end, text);
@@ -772,12 +795,40 @@ const MarkdownEditor = () => {
   // 跟貼上表格一樣用 execCommand 寫回，Ctrl+Z 可以還原
   const replaceText = (start, end, text) => {
     const textarea = editorRef.current;
+    const prev = document.activeElement;
     textarea.focus();
     textarea.setSelectionRange(start, end);
     if (!document.execCommand("insertText", false, text)) {
       updateFileContent(currentContent.slice(0, start) + text + currentContent.slice(end));
     }
+    // 只看預覽時編輯區看不到，焦點不能留在裡面，不然接著按空白鍵會打進原文；還給原本的元素，Tab 才不會從頭開始
+    if (previewOnly) {
+      textarea.blur();
+      prev?.focus({ preventScroll: true });
+    }
   };
+
+  // 只看預覽時焦點不在編輯區，Ctrl/Cmd+Z（加 Shift 是重做）借編輯區的復原紀錄用一下再離開
+  useEffect(() => {
+    if (!previewOnly) return;
+    const onKey = (e) => {
+      const mod = IS_MAC ? e.metaKey && !e.ctrlKey : e.ctrlKey && !e.metaKey;
+      const t = e.target;
+      if (!mod || e.altKey || e.key.toLowerCase() !== "z") return;
+      // 能打字的欄位留給它自己的復原；拉桿、勾選框沒有，照樣復原原文
+      if (t.isContentEditable || t.matches("textarea, select, input:not([type=range], [type=checkbox], [type=radio])")) return;
+      e.preventDefault();
+      const textarea = editorRef.current;
+      textarea.focus();
+      // 唯讀預覽、播放簡報時編輯區是 inert，拿不到焦點：不能讓 undo 改到被蓋住的文件
+      if (document.activeElement !== textarea) return;
+      document.execCommand(e.shiftKey ? "redo" : "undo");
+      textarea.blur();
+      t.focus({ preventScroll: true });
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [previewOnly]);
 
   // 簡報工具回傳整份新原文：只換掉前後相同以外的那一段，游標和復原紀錄才不會整份重來
   const replaceContent = (next) => {
@@ -1203,6 +1254,16 @@ const MarkdownEditor = () => {
               </>
             )}
             <button
+              onClick={() => setPreviewOnly(!previewOnly)}
+              className="group/tip relative flex items-center px-2 py-1.5 text-sm text-gray-700 border border-gray-300 rounded hover:bg-gray-50"
+              aria-label={previewOnly ? "顯示編輯區" : "只看預覽"}
+            >
+              {previewOnly ? <Columns2 size={16} /> : <Eye size={16} />}
+              <Tip text={previewOnly ? "顯示編輯區" : "只看預覽：收起編輯區，投影給別人看"} />
+            </button>
+            {/* 放在切換鈕右邊：出現時才不會把切換鈕擠走，再按一次還點得到 */}
+            {previewOnly && !current.slides && <WidthButton wide={wide} onClick={toggleWide} />}
+            <button
               onClick={insertTable}
               className="group/tip relative flex items-center px-2 lg:px-3 py-1.5 text-sm text-gray-700 border border-gray-300 rounded hover:bg-gray-50"
               aria-label="插入表格"
@@ -1254,13 +1315,16 @@ const MarkdownEditor = () => {
         {/* 編輯器和預覽區 */}
         <div className="flex-1 flex overflow-hidden">
           {/* Markdown 編輯區 */}
-          <div className="flex-1 min-w-0 border-r">
+          {/* 只看預覽時縮成 0 寬而不是 display:none：存檔、插入表格都要 focus 這個 textarea 才能寫進去 */}
+          <div className={previewOnly ? "w-0 overflow-hidden" : "flex-1 min-w-0 border-r"}>
             <textarea
               ref={editorRef}
               value={currentContent}
               onChange={(e) => updateFileContent(e.target.value)}
               onPaste={pasteTable}
               onKeyDown={formatShortcut}
+              tabIndex={previewOnly ? -1 : undefined}
+              aria-hidden={previewOnly || undefined}
               className="w-full h-full p-4 bg-gray-50 font-mono text-sm leading-[1.7] resize-none outline-none"
               placeholder="在此輸入 Markdown..."
             />
@@ -1272,7 +1336,7 @@ const MarkdownEditor = () => {
               {/* 唯讀預覽開著時不放這份的 CSS：兩份簡報同在 div.marpit 底下，只設在這份的屬性會漏到上面 */}
               <Preview
                 doc={viewDoc ? { ...current, css: "" } : current}
-                width="max-w-[70ch]"
+                width={previewOnly && wide ? WIDE : "max-w-[70ch]"}
                 editable
                 tableEvents={{
                   onClick: toggleTask,
@@ -1498,6 +1562,7 @@ const MarkdownEditor = () => {
               {view.slides && marp && (
                 <PlayButton onClick={() => startPresenting(view)} />
               )}
+              {!view.slides && <WidthButton wide={wide} onClick={toggleWide} />}
               <button
                 onClick={saveViewDoc}
                 className="flex items-center px-3 py-1 bg-blue-600 text-white rounded hover:bg-blue-700"
@@ -1516,7 +1581,7 @@ const MarkdownEditor = () => {
           </div>
           <div className="relative flex-1 min-h-0">
             <div className="h-full overflow-auto">
-              <Preview doc={view} width="max-w-3xl" />
+              <Preview doc={view} width={wide ? WIDE : "max-w-3xl"} />
             </div>
             <CharCount html={view.html} />
           </div>
@@ -1735,6 +1800,20 @@ const Preview = ({ doc, width, editable, tableEvents }) => {
     />
   );
 };
+
+const WIDE_KEY = "markdown-editor-wide";
+const WIDE = "max-w-6xl";
+
+const WidthButton = ({ wide, onClick }) => (
+  <button
+    onClick={onClick}
+    className="group/tip relative flex items-center px-2 py-1.5 text-sm text-gray-700 border border-gray-300 rounded hover:bg-gray-50"
+    aria-label={wide ? "窄版" : "寬版"}
+  >
+    {wide ? <FoldHorizontal size={16} /> : <UnfoldHorizontal size={16} />}
+    <Tip text={wide ? "窄版：段落比較好讀" : "寬版：表格不會被擠窄"} />
+  </button>
+);
 
 // 連成一組的按鈕：外框畫在外層，按鈕自己不畫
 const GROUPED_BUTTON =
